@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c//**)",
+      "Read(//d//**)",
+      "Bash(cp *)"
+    ]
+  }
+}

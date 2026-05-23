@@ -1,0 +1,19 @@
+# === CCS / Eclipse 专属垃圾 ===
+.settings/
+.metadata/
+
+# === 硬件编译产物 (绝对不能上云) ===
+Debug/
+Release/
+*.out
+*.hex
+*.bin
+*.map
+*.obj
+*.d
+*.cmd
+
+# === 系统临时文件 ===
+*.tmp
+*.bak
+.DS_Store
