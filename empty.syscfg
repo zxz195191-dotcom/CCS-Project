@@ -14,6 +14,8 @@ const ADC121 = ADC12.addInstance();
 const Board  = scripting.addModule("/ti/driverlib/Board");
 const GPIO   = scripting.addModule("/ti/driverlib/GPIO", {}, false);
 const GPIO1  = GPIO.addInstance();
+const PWM    = scripting.addModule("/ti/driverlib/PWM", {}, false);
+const PWM1   = PWM.addInstance();
 const SYSCTL = scripting.addModule("/ti/driverlib/SYSCTL");
 const UART   = scripting.addModule("/ti/driverlib/UART", {}, false);
 const UART1  = UART.addInstance();
@@ -21,12 +23,13 @@ const UART1  = UART.addInstance();
 /**
  * Write custom configuration values to the imported modules.
  */
-ADC121.$name               = "OUT";
-ADC121.adcMem0trig         = "DL_ADC12_TRIGGER_MODE_TRIGGER_NEXT";
-ADC121.sampClkDiv          = "DL_ADC12_CLOCK_DIVIDE_8";
-ADC121.powerDownMode       = "DL_ADC12_POWER_DOWN_MODE_MANUAL";
-ADC121.sampleTime0         = "125us";
-ADC121.adcPin0Config.$name = "ti_driverlib_gpio_GPIOPinGeneric2";
+ADC121.$name                             = "OUT";
+ADC121.adcMem0trig                       = "DL_ADC12_TRIGGER_MODE_TRIGGER_NEXT";
+ADC121.sampClkDiv                        = "DL_ADC12_CLOCK_DIVIDE_8";
+ADC121.powerDownMode                     = "DL_ADC12_POWER_DOWN_MODE_MANUAL";
+ADC121.sampleTime0                       = "125us";
+ADC121.adcPin0Config.hideOutputInversion = scripting.forceWrite(false);
+ADC121.adcPin0Config.$name               = "ti_driverlib_gpio_GPIOPinGeneric2";
 
 
 GPIO1.port                          = "PORTA";
@@ -41,6 +44,24 @@ GPIO1.associatedPins[2].$name       = "AD2";
 GPIO1.associatedPins[2].assignedPin = "15";
 GPIO1.associatedPins[2].pin.$assign = "PA15";
 
+PWM1.pwmMode                            = "CENTER_ALIGN";
+PWM1.dutyArgs                           = "[50,0,0,0]";
+PWM1.enableShadowLoad                   = true;
+PWM1.$name                              = "WHEELS";
+PWM1.timerCount                         = 2000;
+PWM1.PWM_CHANNEL_0.$name                = "ti_driverlib_pwm_PWMTimerCC0";
+PWM1.PWM_CHANNEL_0.shadowUpdateMode     = "ZERO_EVT";
+PWM1.ccp0PinConfig.direction            = scripting.forceWrite("OUTPUT");
+PWM1.ccp0PinConfig.hideOutputInversion  = scripting.forceWrite(false);
+PWM1.ccp0PinConfig.onlyInternalResistor = scripting.forceWrite(false);
+PWM1.ccp0PinConfig.passedPeripheralType = scripting.forceWrite("Digital");
+PWM1.ccp0PinConfig.$name                = "ti_driverlib_gpio_GPIOPinGeneric3";
+PWM1.peripheral.ccp0Pin.$assign         = "PA17";
+PWM1.peripheral.ccp1Pin.$assign         = "PA18";
+PWM1.PWM_CHANNEL_1.$name                = "ti_driverlib_pwm_PWMTimerCC1";
+PWM1.PWM_CHANNEL_1.shadowUpdateMode     = "ZERO_EVT";
+PWM1.ccp1PinConfig.$name                = "ti_driverlib_gpio_GPIOPinGeneric4";
+
 SYSCTL.forceDefaultClkConfig = true;
 
 UART1.$name                            = "TRACE_UART";
@@ -49,6 +70,9 @@ UART1.enableDMARX                      = false;
 UART1.enableDMATX                      = false;
 UART1.rxFifoThreshold                  = "DL_UART_RX_FIFO_LEVEL_3_4_FULL";
 UART1.rxTimeoutValue                   = 15;
+UART1.targetBaudRate                   = 115200;
+UART1.peripheral.rxPin.$assign         = "PA9";
+UART1.peripheral.txPin.$assign         = "PA8";
 UART1.txPinConfig.direction            = scripting.forceWrite("OUTPUT");
 UART1.txPinConfig.hideOutputInversion  = scripting.forceWrite(false);
 UART1.txPinConfig.onlyInternalResistor = scripting.forceWrite(false);
@@ -58,8 +82,6 @@ UART1.rxPinConfig.hideOutputInversion  = scripting.forceWrite(false);
 UART1.rxPinConfig.onlyInternalResistor = scripting.forceWrite(false);
 UART1.rxPinConfig.passedPeripheralType = scripting.forceWrite("Digital");
 UART1.rxPinConfig.$name                = "ti_driverlib_gpio_GPIOPinGeneric1";
-UART1.peripheral.rxPin.$assign         = "PA9";
-UART1.peripheral.txPin.$assign         = "PA8";
 
 /**
  * Pinmux solution for unlocked pins/peripherals. This ensures that minor changes to the automatic solver in a future
@@ -72,5 +94,6 @@ Board.peripheral.$suggestSolution            = "DEBUGSS";
 Board.peripheral.swclkPin.$suggestSolution   = "PA20";
 Board.peripheral.swdioPin.$suggestSolution   = "PA19";
 GPIO1.associatedPins[0].pin.$suggestSolution = "PA13";
+PWM1.peripheral.$suggestSolution             = "TIMA1";
 SYSCTL.peripheral.$suggestSolution           = "SYSCTL";
 UART1.peripheral.$suggestSolution            = "UART1";
