@@ -1,51 +1,44 @@
 #include "headfile.h"
 #define Max_Speed 1000
 
-typedef enum{
-    Left_Wheel = 0,
-    Right_Wheel,
-    Wheel_count
-}Motor_ID_e;
 
+const Motor_Config_t Motor_Cfg[Wheel_count] = {
+    [Left_Wheel] = {
+        .dir_port = Motor_Direction_PORT,
+        .in1_pin = Motor_Direction_IN1_PIN,//PB0
+        .in2_pin = Motor_Direction_IN2_PIN,//PB1
+        .pmw_tiemr = WHEELS_INST,//TimerA
+        .cc_index = DL_TIMER_CC_0_INDEX,//PA17
+    },
 
-# L_IN1_HIGH DL_GPIO_setPins();
-# L_IN2_HIGH DL_GPIO_setPins();
-# R_IN3_HIGH DL_GPIO_setPins();
-# R_IN4_HIGH DL_GPIO_setPins();
-
-# L_IN1_LOW DL_GPIO_clearPins();
-# L_IN2_LOW DL_GPIO_clearPins();
-# R_IN3_LOW DL_GPIO_clearPins();
-# r_IN4_LOW DL_GPIO_clearPins();
-
-#或者之前你教我的 寄存器写入01 配置好同一组gpio 然后就可以原子态同时修改in1 2(虽然6612不需要死区 不用担心同时导通) 具体写法忘记了 ccs的函数也不熟悉 然后我还想学点新的
-#就是更"高级"的写法
-
-void Motor_Forward(Motor_ID_e m){
-    switch m{
-        case Left_Wheel:
-//      TODO
-        break;
-        case Right_Wheel:
-//      TODO
-        break;
+    [Right_Wheel] = {
+        .dir_port = Motor_Direction_PORT,
+        .in1_pin = Motor_Direction_IN3_PIN,//PB8
+        .in2_pin = Motor_Direction_IN4_PIN,//PB9
+        .pmw_tiemr = WHEELS_INST,//TimerA
+        .cc_index = DL_TIMER_CC_1_INDEX,//PA18
     }
-}
+};
 
-void Motor_Backward(Motor_ID_e m){
-
-}
-
-void Motor_Set_Speed(Motor_ID_e m,int32_t speed){
+void Motor_Set_Speed(Motor_ID_e motor_id,int32_t speed){
+    uint32_t abs_speed = 0;
+    //获取对象的信息
+    const Motor_Config_t* m = &Motor_Cfg[motor_id];//有点惊艳到 当然更多的是懵逼 之前接触过这个 蓝桥杯扫描按键 就是结构体数组赋值
+    //实现类似c++的对象编程 但是这句话没有见到过 以及当时也没用上const 还有初始化对象也没有使用上指针 包括这里
+    //之前写掐头去尾的滤波(自己设置长度 冒泡排序 最大最小去掉 最后求平均值)为了方便调用 形参也是指针 但当时也不是很理解
+    //指针是存放变量地址的变量 形参可以直接操作结构体实例化对象的数据 这么理解吧 但是总觉得还差了点什么
     if(speed > Max_Speed) speed = Max_Speed;
     if(speed < -Max_Speed) speed = -Max_Speed;
     
     if(speed >= 0){
-        Motor_Forward(m);
+        DL_GPIO_setPins(m->dir_port, m->in1_pin);    
+        DL_GPIO_clearPins(m->dir_port, m->in2_pin);    
+        abs_speed = speed;
     }else{
-        Motor_Backward(m);
+        DL_GPIO_setPins(m->dir_port, m->in2_pin);    
+        DL_GPIO_clearPins(m->dir_port, m->in1_pin);    
+        abs_speed = -speed;        
     }
-
-    // DL_TimerA_setCaptureCompareValue()这里面的参数不理解 我想要的是 这里单纯设置速度 上面if确定对象 不过这个函数不确定支不支持
-    // #然后这是突发奇想 更加优质 高级的做法?
+    DL_TimerA_setCaptureCompareValue(m->pmw_tiemr, (Max_Speed - abs_speed),m->cc_index);
+    debug_once('Y');
 }

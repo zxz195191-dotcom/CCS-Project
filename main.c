@@ -10,13 +10,15 @@ uint8_t chx = 0;
 int main(void)
 {
     SYSCFG_DL_init();
-    
+    DL_TimerA_startCounter(WHEELS_INST);
     trace_init();
 
     DL_UART_Main_transmitDataBlocking(UART1,'A');
 
     char tx_buffer[64];
 
+    Motor_Set_Speed(Left_Wheel, -100);
+    Motor_Set_Speed(Right_Wheel, 200);
     while (1) {
         
         for (uint8_t i = 0 ; i < TRACE_SENSOR_COUNT; i++) {
@@ -31,7 +33,7 @@ int main(void)
     //             sensors[0].current_ADC, 
     //             sensors[7].current_ADC, 
     //             final_error);
-                 uart_transmit(tx_buffer);
+                //  uart_transmit(tx_buffer);
 
     // printf("CH1: %d, CH8: %d | ERROR: %d \r\n", 
     //            sensors[0].current_ADC, 

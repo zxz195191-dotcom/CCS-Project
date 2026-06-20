@@ -1,6 +1,4 @@
 #pragma once
-#include "stdint.h"
-#include "ti_msp_dl_config.h"
 #include "headfile.h"
 
 
@@ -31,3 +29,4 @@ void trace_init();//自动触发修改成软件触发
 void trace_readByADC();
 void CHx(uint8_t i); 
 int32_t trace_get_error(Trace_OUT_t *t);
+void debug_once(char character);
