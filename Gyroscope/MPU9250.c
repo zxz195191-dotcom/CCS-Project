@@ -1,113 +1,247 @@
 #include "headfile.h"
 
-/*  sprintf(buf, "L:%u R:%d ISR:%lu\r\n", left_cnt, right_val, isr_cnt);
-    uart_transmit(buf); */
 
 char buffer[64];
-// void Scan_I2C_Devices(void){
-
-//     sprintf(buffer,"Start Scan...");
-//     uart_transmit(buffer);
-//    // delay_cycles(120000);
-// // I2C 7位地址范围通常是 0x01 到 0x7F
-//     for(uint8_t addr = 0x01 ; addr < 0x80 ; addr++){
-
-// // 1. 准备一封“空传单”（试探数据）
-//         uint8_t dummy_data = 0x00;
-
-// /*DL_I2C_fillControllerTXFIFO(I2C_Regs *i2c, uint8_t *buffer, uint16_t count)
-// 作用： 把数据塞进 I2C 的发送缓存区（就像把传单塞给服务员）。
-// 参数： 模块名，数据的指针，数据长度。*/
-//         DL_I2C_fillControllerTXFIFO(I2C_0_INST,&dummy_data,1);
-
-// //发起一次通讯(通讯对象再syscfg的命名 通讯的数据 
-// //direction: 方向，写填 DL_I2C_CONTROLLER_DIRECTION_TX，读填 DL_I2C_CONTROLLER_DIRECTION_RX。
-// //扫描不需要真的传输字节 0)
-//         DL_I2C_startControllerTransfer(I2C_0_INST, addr , DL_I2C_CONTROLLER_DIRECTION_TX , 1);
-
-// /*DL_I2C_getControllerStatus(I2C_Regs *i2c)
-// 作用： 获取当前 I2C 控制器的状态寄存器。
-// 返回值： 一个由各种状态掩码组成的 32 位整数。
-// 关键掩码（Mask）：
-// DL_I2C_CONTROLLER_STATUS_BUSY_BUS: 总线忙。
-// DL_I2C_CONTROLLER_STATUS_ERROR_NACK: 收到 NACK*/
 
 
+/*
+▎MSPM0 I2C 控制器 = 状态机 + FIFO + 中断标志，三个独立模块。 
+▎没有 "resetAll" 函数，必须 resetControllerTransfer + flush + clearInterruptStatus 
+▎三个一起上，才能确保下一次传输从零开始。 
+*/
+/*
+扫描函数流程
 
-// // 3. 等待总线空闲 (带超时防卡死)
-//         uint32_t timeout = 100000;
-//         while (DL_I2C_getControllerStatus(I2C_0_INST) & DL_I2C_CONTROLLER_STATUS_BUSY_BUS) {
-//             timeout--;
-//             if (timeout == 0) {
-//                 sprintf(buffer, "Bus Stuck at 0x%02X!\r\n", addr);
-//                 uart_transmit(buffer);
-//                 return;
-//             }
-//         }
+START（分支 无ACK ->无设备）
 
-//         uint32_t final_addr = DL_I2C_getControllerStatus(I2C_0_INST);
-//         bool is_nack = ((final_addr & DL_I2C_CONTROLLER_STATUS_ERROR_NACK) != 0);
+地址（从机地址 & ACK?）                 0x68 + W（9250地址）
 
-//         if(!is_nack){
-//             sprintf(buffer, "Device 0x%02X\r\n", addr);
-//             uart_transmit(buffer);        
-//         }else{
-//             DL_I2C_flushControllerTXFIFO(I2C_0_INST);
-//         }
+WRITE
 
-//         delay_cycles(120000);
-//     }
-//     sprintf(buffer, "Scan Complete.\r\n");
-//     uart_transmit(buffer);
-// }    
+ACK ?
+
+STOP
+*/
 void Scan_I2C_Devices(void) {
-    sprintf(buffer, "Start Scan...\r\n");
+    sprintf(buffer, "Start Clean Scan...\r\n");
     uart_transmit(buffer); 
 
-    for(uint8_t addr = 0x00; addr < 0x80; addr++) {
+    // I2C 7位地址都是从 0x01 开始的
+    for(uint8_t addr = 0x01; addr < 0x80; addr++) {
         
         uint8_t dummy_data = 0x00;
         
-        // 1. 塞数据并启动
-        DL_I2C_fillControllerTXFIFO(I2C_0_INST, &dummy_data, 1);
-        DL_I2C_startControllerTransfer(I2C_0_INST, addr, DL_I2C_CONTROLLER_DIRECTION_TX, 1);
+        DL_I2C_clearInterruptStatus(I2C_0_INST, 0xFFFFFFFF);
+        // 防止总线因为各种原因导致的中断挂起没清理干净 而死机（比如说上次传输如果NACK）
+        //效果： 直接在总线上把sda从低拉高（在时钟线高电平时）->直接把通讯逻辑复位了
+        //否则：卡在出错状态 状态机不是IDLE 所有请求会被忽视
+        DL_I2C_flushControllerTXFIFO(I2C_0_INST);
+        /*防止上次传输数据还有残留 扫描设备需要发送地址和0x00 
+        To write the internal MPU-9250 registers, the master transmits the start condition (S), followed by the I2C address and the write bit (0).*/
+        //如果有残留数据 就会通信失败
 
-        // 2. 超时防卡死
+
+        DL_I2C_fillControllerTXFIFO(I2C_0_INST, &dummy_data, 1);
+        // 塞入探路数据并启动
+        DL_I2C_startControllerTransfer(I2C_0_INST, addr, DL_I2C_CONTROLLER_DIRECTION_TX, 1);
+        //实际实现的 START → 地址 → R/W → ACK 检测 → 数据发送 → STOP（或等待后续操作）
+
+        // 要么成功(TX_DONE)，要么失败(NACK)
         uint32_t timeout = 100000;
-        while (DL_I2C_getControllerStatus(I2C_0_INST) & DL_I2C_CONTROLLER_STATUS_BUSY_BUS) {
-            timeout--;
-            if (timeout == 0) {
-                sprintf(buffer, "Bus Stuck at 0x%02X!\r\n", addr);
-                uart_transmit(buffer);
-                return;
+        bool is_nack = true; // 默认没回应
+        
+        while (--timeout > 0) {
+            // 检查情况 1：收到 NACK（没人理）
+            if (DL_I2C_getRawInterruptStatus(I2C_0_INST, DL_I2C_INTERRUPT_CONTROLLER_NACK)) {
+                is_nack = true;
+                break;
+            }
+            // 检查情况 2：收到 TX_DONE（对方不仅回了 ACK，单片机还把数据发完了）
+            if (DL_I2C_getRawInterruptStatus(I2C_0_INST, DL_I2C_INTERRUPT_CONTROLLER_TX_DONE)) {
+                is_nack = false; // 抓到了！
+                break;
             }
         }
 
-        // 3. 查验结果
-        //uint32_t final_status = DL_I2C_getControllerStatus(I2C_0_INST);
-        uint32_t final_status = DL_I2C_getRawInterruptStatus(I2C_0_INST,DL_I2C_INTERRUPT_CONTROLLER_NACK);
-        bool is_nack = ((final_status & DL_I2C_INTERRUPT_CONTROLLER_NACK) != 0);
-
+        // 查验最终结论
         if (!is_nack) {
-            // 抓到设备！
-            sprintf(buffer, "Found Device at 0x%02X\r\n", addr);
+            // 只有真正的物理 ACK 才会走到这里
+            sprintf(buffer, ">>> REAL Device Found at 0x%02X <<<\r\n", addr);
             uart_transmit(buffer);        
-        } else {
-            // 收到 NACK，清理战场
-            DL_I2C_flushControllerTXFIFO(I2C_0_INST);
-            
-            // 【核心修复】：一键重置内部状态机，清除 ERROR 标志，防止下次传输死锁！
-            DL_I2C_resetControllerTransfer(I2C_0_INST);
-
-            DL_I2C_resetControllerTransfer(I2C_0_INST);
-
-            DL_I2C_clearInterruptStatus(I2C_0_INST,DL_I2C_INTERRUPT_CONTROLLER_NACK);
         }
 
-        // 【核心修复】：给物理总线产生 STOP 电平留出充足的时间 (约10ms)
-        delay_cycles(320000); 
+        // 不管成功还是失败，只要这轮结束了，立刻拍碎状态机，清空所有灯
+        DL_I2C_flushControllerTXFIFO(I2C_0_INST);
+        DL_I2C_resetControllerTransfer(I2C_0_INST);
+        DL_I2C_clearInterruptStatus(I2C_0_INST, 0xFFFFFFFF);
+
+        // 给物理总线留 2~3 毫秒彻底释放电平
+        delay_cycles(96000); 
     }
     
     sprintf(buffer, "Scan Complete.\r\n");
     uart_transmit(buffer); 
+}
+
+
+
+
+/*
+寄存器地址本身需要通过“写”操作发送
+
+START
+
+地址 + Write
+
+ACK
+
+寄存器地址
+
+ACK
+但现在总线的数据方向还是“主机 → 从机”（写模式），而真正的数据应该由 MPU 发给主机。
+
+所以不能直接继续。（如果scl=HIGH的时候 SDA=LOW->HIGH（挂电话））
+Repeated START（保持通讯）
+
+地址 + Read
+
+ACK
+*/
+uint8_t MPU9250_Read_Reg(uint8_t dev_addr, uint8_t reg_addr) {
+    uint8_t data = 0;
+
+    // 0. 清理战场，防止上次的旧便利贴干扰
+    DL_I2C_clearInterruptStatus(I2C_0_INST, 0xFFFFFFFF);
+
+    // ==========================================
+    // 1. TX 阶段：发寄存器地址，强行扣留 STOP
+    // ==========================================
+    DL_I2C_fillControllerTXFIFO(I2C_0_INST, &reg_addr, 1);
+    
+
+/*
+@brief Sets up a transfer from I2C controller with control of START,
+STOP and ACK
+*/  DL_I2C_startControllerTransferAdvanced(
+        I2C_0_INST, 
+        dev_addr, 
+        DL_I2C_CONTROLLER_DIRECTION_TX, 
+        1,
+        DL_I2C_CONTROLLER_START_ENABLE,
+        DL_I2C_CONTROLLER_STOP_DISABLE,   // <--- 不发 STOP，霸占总线！
+        DL_I2C_CONTROLLER_ACK_ENABLE         // <--- 期待从机给出 ACK
+    );
+
+    // 【核心修复】：绝对不能等 BUSY_BUS！只能等 TX_DONE 中断标志！
+    uint32_t timeout = 100000;
+    while (!(DL_I2C_getRawInterruptStatus(I2C_0_INST, DL_I2C_INTERRUPT_CONTROLLER_TX_DONE))) {
+        if (DL_I2C_getRawInterruptStatus(I2C_0_INST, DL_I2C_INTERRUPT_CONTROLLER_NACK)) {
+            DL_I2C_resetControllerTransfer(I2C_0_INST);
+            return 0xFF; // TX 阶段被拒收
+        }
+        if (--timeout == 0) return 0xAA; // TX 卡死
+    }
+
+    DL_I2C_clearInterruptStatus(I2C_0_INST, 0xFFFFFFFF);
+
+    // ==========================================
+    // 2. RX 阶段：带着 Repeated Start 开始读数据
+    // ==========================================
+    DL_I2C_startControllerTransferAdvanced(
+        I2C_0_INST, 
+        dev_addr, 
+        DL_I2C_CONTROLLER_DIRECTION_RX, 
+        1,
+        DL_I2C_CONTROLLER_START_ENABLE,   // <--- 因为没发 STOP，硬件自动将其变为 Sr (重复起始)
+        DL_I2C_CONTROLLER_STOP_ENABLE,    // <--- 这次读完，可以发 STOP 释放总线了
+        DL_I2C_CONTROLLER_ACK_DISABLE        // <--- I2C规范：主控读最后一个字节必须给 NACK
+    );
+
+    // 等待 RX 接收完成标志
+    timeout = 100000;
+    while (!(DL_I2C_getRawInterruptStatus(I2C_0_INST, DL_I2C_INTERRUPT_CONTROLLER_RX_DONE))) {
+        if (DL_I2C_getRawInterruptStatus(I2C_0_INST, DL_I2C_INTERRUPT_CONTROLLER_NACK)) {
+            DL_I2C_resetControllerTransfer(I2C_0_INST);
+            return 0xDD; // RX 阶段被拒收
+        }
+        if (--timeout == 0) return 0xBB; // RX 卡死
+    }
+
+    // ==========================================
+    // 3. 收货：查 FIFO
+    // ==========================================
+    if (!DL_I2C_isControllerRXFIFOEmpty(I2C_0_INST)) {
+        data = DL_I2C_receiveControllerData(I2C_0_INST);
+    } else {
+        return 0xEE; // 最极端的硬件 Bug
+    }
+
+    delay_cycles(32000); 
+    return data;
+}
+
+
+
+uint8_t MPU9250_Write_Reg(uint8_t dev_addr, uint8_t reg_addr, uint8_t data) {
+    uint8_t tx_buf[2] = {reg_addr, data};
+    
+    DL_I2C_clearInterruptStatus(I2C_0_INST, 0xFFFFFFFF);
+
+    // 把寄存器地址和数据一起塞进 FIFO，长度为 2
+    DL_I2C_fillControllerTXFIFO(I2C_0_INST, tx_buf, 2);
+    
+    // 启动普通写传输（写完会自动发 STOP 释放总线）
+    DL_I2C_startControllerTransfer(I2C_0_INST, dev_addr, DL_I2C_CONTROLLER_DIRECTION_TX, 2);
+
+    // 等待发送完成 (TX_DONE)
+    uint32_t timeout = 100000;
+    while (!(DL_I2C_getRawInterruptStatus(I2C_0_INST, DL_I2C_INTERRUPT_CONTROLLER_TX_DONE))) {
+        if (DL_I2C_getRawInterruptStatus(I2C_0_INST, DL_I2C_INTERRUPT_CONTROLLER_NACK)) {
+            DL_I2C_resetControllerTransfer(I2C_0_INST);
+            return 1; // 写入被拒收，失败
+        }
+        if (--timeout == 0) return 2; // 卡死
+    }
+
+    return 0; // 成功！
+}
+
+MPU9250_Data_t mpu_data = {0};
+
+void MPU9250_Read_All_Axis(MPU9250_Data_t *dat){    
+
+    uint8_t accel_x_h = MPU9250_Read_Reg(0x68, 0x3B);
+    uint8_t accel_x_l = MPU9250_Read_Reg(0x68, 0x3C);
+    uint8_t accel_y_h = MPU9250_Read_Reg(0x68, 0x3D);
+    uint8_t accel_y_l = MPU9250_Read_Reg(0x68, 0x3E);
+    uint8_t accel_z_h = MPU9250_Read_Reg(0x68, 0x3F);
+    uint8_t accel_z_l = MPU9250_Read_Reg(0x68, 0x40);
+
+    dat->accel_raw[x] = (int16_t)((accel_x_h << 8) | accel_x_l);
+    dat->accel_raw[y] = (int16_t)((accel_y_h << 8) | accel_y_l);
+    dat->accel_raw[z] = (int16_t)((accel_z_h << 8) | accel_z_l);
+
+    for(uint8_t i = 0; i < num ; i++){
+        dat->accel_g[i] = (float)(dat->accel_raw[i] / 16384.0f);
+    }
+
+    uint8_t gyro_x_h = MPU9250_Read_Reg(0x68, 0x43);
+    uint8_t gyro_x_l = MPU9250_Read_Reg(0x68, 0x44);
+    uint8_t gyro_y_h = MPU9250_Read_Reg(0x68, 0x45);
+    uint8_t gyro_y_l = MPU9250_Read_Reg(0x68, 0x46);
+    uint8_t gyro_z_h = MPU9250_Read_Reg(0x68, 0x47);
+    uint8_t gyro_z_l = MPU9250_Read_Reg(0x68, 0x48);
+
+    dat->gyro_raw[x] = (int16_t)((gyro_x_h << 8) | gyro_x_l);
+    dat->gyro_raw[y] = (int16_t)((gyro_y_h << 8) | gyro_y_l);
+    dat->gyro_raw[z] = (int16_t)((gyro_z_h << 8) | gyro_z_l);
+
+    for(uint8_t i = 0; i < num ; i++){
+        dat->gyro_dps[i] = (float)(dat->gyro_raw[i] / 131.0f);
+    }
+}
+
+void MPU9250_Init(void){
+    MPU9250_Write_Reg(0x68, 0x6B, 0x00);
+    delay_cycles(320000);
 }
