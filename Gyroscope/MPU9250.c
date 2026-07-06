@@ -245,3 +245,68 @@ void MPU9250_Init(void){
     MPU9250_Write_Reg(0x68, 0x6B, 0x00);
     delay_cycles(320000);
 }
+
+
+/*整个函数就是为了完成这一串动作。
+START -> 0x68 + Write -> ACK -> 0x75(寄存器地址) -> ACK -> Repeated START -> 0x68 + Read
+
+ -> ACK -> Data1 -> Data2 -> ACK -> Data3 -> ACK -> Data4 -> ACK -> Data5 -> ACK -> Data6
+
+ -> NACK -> STOP
+*/
+
+void MPU9250_Read_Len(  ){
+// 1. 发送首寄存器地址 (强行扣留 STOP)
+    DL_I2C_clearInterruptStatus(I2C_0_INST, 0xFFFFFFFF);//->处理9250内部的寄存器
+    //XXXX错误//9250里面会有很多用于判断状态的标志位 R/TX_DONE；NACK；ARBITRATION LOST；STOP ；START
+    //--->清除 MSPM0 I2C 控制器内部的中断状态寄存器。这些标志属于 MSPM0，不属于 MPU9250。
+
+    //如果第一次发送完成 第二次想要再次接收9250发送的数据 就必须要把发送完成标志位清理干净（上一轮结束之后tx_done = 1）
+    DL_I2C_flushControllerTXFIFO(I2C_0_INST);
+    DL_I2C_fillControllerTXFIFO(I2C_0_INST, &reg_addr, 1);
+    
+    DL_I2C_startControllerTransferAdvanced(I2C_0_INST, dev_addr, DL_I2C_CONTROLLER_DIRECTION_TX, 1,
+        DL_I2C_CONTROLLER_START_ENABLE, DL_I2C_CONTROLLER_STOP_DISABLE, DL_I2C_CONTROLLER_ACK_ENABLE);
+    //普通的发送函数会在结尾附带stop （但是这才是 0x68 + Read -> ACK -> Data1 -> Data2 -> ACK需要的流程）
+   //或者说 普通的发送函数就是默认内部 STOP = ENABLE
+   /*普通发送接口内部默认：
+    START_ENABLE
+    STOP_ENABLE
+    ACK_ENABLE
+    因此一次传输结束后会自动发送 STOP。
+    而读取寄存器需要 Repeated START，因此这里必须关闭 STOP。*/
+  //这里就可以理解成Repeated START的实现
+
+    uint32_t timeout = 100000;
+    while (!(DL_I2C_getRawInterruptStatus(I2C_0_INST, DL_I2C_INTERRUPT_CONTROLLER_TX_DONE))) {
+        if (--timeout == 0) return 1; // 卡死或 NACK
+    }
+    //必须要确定是否tx_done "cpu -> xMHz" "I2C -> 400KHz"cpu跑了几百轮 i2c可能连地址都还没发完
+    
+    // 2. 发起连续读取任务，长度设置为请求的 len
+    DL_I2C_clearInterruptStatus(I2C_0_INST, 0xFFFFFFFF);
+    //上面已经使用了tx_done 下面需要判断cpu是否rx_done 但是两个公用一个标志位 必须先清除
+    DL_I2C_startControllerTransferAdvanced(I2C_0_INST, dev_addr, DL_I2C_CONTROLLER_DIRECTION_RX, len,
+        DL_I2C_CONTROLLER_START_ENABLE, DL_I2C_CONTROLLER_STOP_ENABLE, DL_I2C_CONTROLLER_ACK_NACK);
+    //设置总长度len 然后 DL_I2C_CONTROLLER_ACK_NACK的意思就是 在到达len-1之前 一直ack 
+    //直到len-1 发送nack 此时数据传输结束
+
+
+    // 3. 边收边拿：守在流水线旁边，来一个拿一个，防止 FIFO 溢出卡死
+    uint8_t got_bytes = 0;
+    timeout = 500000;
+    
+    while (got_bytes < len) {
+       
+        if ( !DL_I2C_isControllerRXFIFOEmpty(I2C_0_INST) ) {
+           
+            buf[got_bytes] = DL_I2C_receiveControllerData(I2C_0_INST);
+            got_bytes++;
+        }
+        
+        if (--timeout == 0) return 2; // 严重超时
+    }
+    
+    delay_cycles(32000); 
+    return 0; // 完美收工！
+}

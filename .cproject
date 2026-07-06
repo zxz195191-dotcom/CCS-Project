@@ -41,6 +41,7 @@
                                     <listOptionValue value="${COM_TI_MSPM0_SDK_INSTALL_DIR}/source/third_party/CMSIS/Core/Include"/>
                                     <listOptionValue value="${COM_TI_MSPM0_SDK_INSTALL_DIR}/source"/>
                                     <listOptionValue value="${PROJECT_ROOT}/TRACE"/>
+                                    <listOptionValue value="${PROJECT_ROOT}/Gyroscope"/>
                                 </option>
                                 <option id="com.ti.ccstudio.buildDefinitions.TMS470_TICLANG_4.0.compilerID.DEFINE.537051507" superClass="com.ti.ccstudio.buildDefinitions.TMS470_TICLANG_4.0.compilerID.DEFINE" valueType="definedSymbols">
                                     <listOptionValue value="${COM_TI_MSPM0_SDK_SYMBOLS}"/>
@@ -103,6 +104,7 @@
                                     <listOptionValue value="${COM_TI_MSPM0_SDK_INSTALL_DIR}/source/third_party/CMSIS/Core/Include"/>
                                     <listOptionValue value="${COM_TI_MSPM0_SDK_INSTALL_DIR}/source"/>
                                     <listOptionValue value="${PROJECT_ROOT}/TRACE"/>
+                                    <listOptionValue value="${PROJECT_ROOT}/Gyroscope"/>
                                 </option>
                             </tool>
                             <tool id="com.ti.ccstudio.buildDefinitions.TMS470_TICLANG_4.0.exe.linkerDebug.449978443" name="Arm Linker" superClass="com.ti.ccstudio.buildDefinitions.TMS470_TICLANG_4.0.exe.linkerDebug.384032740"/>
@@ -121,6 +123,44 @@
                                 <listOptionValue value="${COM_TI_MSPM0_SDK_INSTALL_DIR}/source/third_party/CMSIS/Core/Include"/>
                                 <listOptionValue value="${COM_TI_MSPM0_SDK_INSTALL_DIR}/source"/>
                                 <listOptionValue value="${PROJECT_ROOT}/TRACE"/>
+                                <listOptionValue value="${PROJECT_ROOT}/Gyroscope"/>
+                            </option>
+                        </tool>
+                    </fileInfo>
+                    <folderInfo id="com.ti.ccstudio.buildDefinitions.TMS470.Debug.2085983232.Gyroscope" name="Gyroscope" resourcePath="Gyroscope">
+                        <toolChain id="com.ti.ccstudio.buildDefinitions.TMS470_TICLANG_4.0.exe.DebugToolchain.511123712" name="TI Build Tools" superClass="com.ti.ccstudio.buildDefinitions.TMS470_TICLANG_4.0.exe.DebugToolchain" unusedChildren="">
+                            <option id="com.ti.ccstudio.buildDefinitions.core.OPT_TAGS.277741393.650425015" superClass="com.ti.ccstudio.buildDefinitions.core.OPT_TAGS.277741393"/>
+                            <option id="com.ti.ccstudio.buildDefinitions.core.OPT_CODEGEN_VERSION.2095086729.1612751266" superClass="com.ti.ccstudio.buildDefinitions.core.OPT_CODEGEN_VERSION.2095086729"/>
+                            <targetPlatform id="com.ti.ccstudio.buildDefinitions.TMS470_TICLANG_4.0.exe.targetPlatformDebug" name="Platform" superClass="com.ti.ccstudio.buildDefinitions.TMS470_TICLANG_4.0.exe.targetPlatformDebug"/>
+                            <tool id="com.ti.ccstudio.buildDefinitions.TMS470_TICLANG_4.0.exe.compilerDebug.1708393411" name="Arm Compiler" superClass="com.ti.ccstudio.buildDefinitions.TMS470_TICLANG_4.0.exe.compilerDebug.1498440447">
+                                <option id="com.ti.ccstudio.buildDefinitions.TMS470_TICLANG_4.0.compilerID.INCLUDE_PATH.604315033" superClass="com.ti.ccstudio.buildDefinitions.TMS470_TICLANG_4.0.compilerID.INCLUDE_PATH" valueType="includePath">
+                                    <listOptionValue value="${COM_TI_MSPM0_SDK_INCLUDE_PATH}"/>
+                                    <listOptionValue value="${SYSCONFIG_TOOL_INCLUDE_PATH}"/>
+                                    <listOptionValue value="${PROJECT_ROOT}"/>
+                                    <listOptionValue value="${PROJECT_ROOT}/${ConfigName}"/>
+                                    <listOptionValue value="${COM_TI_MSPM0_SDK_INSTALL_DIR}/source/third_party/CMSIS/Core/Include"/>
+                                    <listOptionValue value="${COM_TI_MSPM0_SDK_INSTALL_DIR}/source"/>
+                                    <listOptionValue value="${PROJECT_ROOT}/Gyroscope"/>
+                                    <listOptionValue value="${PROJECT_ROOT}/TRACE"/>
+                                </option>
+                            </tool>
+                            <tool id="com.ti.ccstudio.buildDefinitions.TMS470_TICLANG_4.0.exe.linkerDebug.704512356" name="Arm Linker" superClass="com.ti.ccstudio.buildDefinitions.TMS470_TICLANG_4.0.exe.linkerDebug.384032740"/>
+                            <tool id="com.ti.ccstudio.buildDefinitions.TMS470_TICLANG_4.0.hex.1978697670" name="Arm Hex Utility" superClass="com.ti.ccstudio.buildDefinitions.TMS470_TICLANG_4.0.hex.683419396"/>
+                            <tool id="com.ti.ccstudio.buildDefinitions.TMS470_TICLANG_4.0.objcopy.1183136308" name="Arm Objcopy Utility" superClass="com.ti.ccstudio.buildDefinitions.TMS470_TICLANG_4.0.objcopy.943169191"/>
+                            <tool id="com.ti.ccstudio.buildDefinitions.sysConfig.1069032087" name="SysConfig" superClass="com.ti.ccstudio.buildDefinitions.sysConfig.899076386"/>
+                        </toolChain>
+                    </folderInfo>
+                    <fileInfo id="com.ti.ccstudio.buildDefinitions.TMS470.Debug.2085983232.Gyroscope/MPU9250.c" name="MPU9250.c" rcbsApplicability="disable" resourcePath="Gyroscope/MPU9250.c" toolsToInvoke="com.ti.ccstudio.buildDefinitions.TMS470_TICLANG_4.0.exe.compilerDebug.1498440447.859362798">
+                        <tool id="com.ti.ccstudio.buildDefinitions.TMS470_TICLANG_4.0.exe.compilerDebug.1498440447.859362798" name="Arm Compiler" superClass="com.ti.ccstudio.buildDefinitions.TMS470_TICLANG_4.0.exe.compilerDebug.1498440447">
+                            <option id="com.ti.ccstudio.buildDefinitions.TMS470_TICLANG_4.0.compilerID.INCLUDE_PATH.458539642" superClass="com.ti.ccstudio.buildDefinitions.TMS470_TICLANG_4.0.compilerID.INCLUDE_PATH" valueType="includePath">
+                                <listOptionValue value="${COM_TI_MSPM0_SDK_INCLUDE_PATH}"/>
+                                <listOptionValue value="${SYSCONFIG_TOOL_INCLUDE_PATH}"/>
+                                <listOptionValue value="${PROJECT_ROOT}"/>
+                                <listOptionValue value="${PROJECT_ROOT}/${ConfigName}"/>
+                                <listOptionValue value="${COM_TI_MSPM0_SDK_INSTALL_DIR}/source/third_party/CMSIS/Core/Include"/>
+                                <listOptionValue value="${COM_TI_MSPM0_SDK_INSTALL_DIR}/source"/>
+                                <listOptionValue value="${PROJECT_ROOT}/TRACE"/>
+                                <listOptionValue value="${PROJECT_ROOT}/Gyroscope"/>
                             </option>
                         </tool>
                     </fileInfo>

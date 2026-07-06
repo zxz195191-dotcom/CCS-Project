@@ -3,7 +3,8 @@
     "allow": [
       "Read(//c//**)",
       "Read(//d//**)",
-      "Bash(cp *)"
+      "Bash(cp *)",
+      "Bash(ping -n 2 github.com)"
     ]
   }
 }

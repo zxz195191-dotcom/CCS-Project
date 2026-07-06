@@ -23,10 +23,7 @@ const Motor_Config_t Motor_Cfg[Wheel_count] = {
 void Motor_Set_Speed(Motor_ID_e motor_id,int32_t speed){
     uint32_t abs_speed = 0;
     //获取对象的信息
-    const Motor_Config_t* m = &Motor_Cfg[motor_id];//有点惊艳到 当然更多的是懵逼 之前接触过这个 蓝桥杯扫描按键 就是结构体数组赋值
-    //实现类似c++的对象编程 但是这句话没有见到过 以及当时也没用上const 还有初始化对象也没有使用上指针 包括这里
-    //之前写掐头去尾的滤波(自己设置长度 冒泡排序 最大最小去掉 最后求平均值)为了方便调用 形参也是指针 但当时也不是很理解
-    //指针是存放变量地址的变量 形参可以直接操作结构体实例化对象的数据 这么理解吧 但是总觉得还差了点什么
+    const Motor_Config_t* m = &Motor_Cfg[motor_id];
     if(speed > Max_Speed) speed = Max_Speed;
     if(speed < -Max_Speed) speed = -Max_Speed;
     
@@ -40,5 +37,25 @@ void Motor_Set_Speed(Motor_ID_e motor_id,int32_t speed){
         abs_speed = -speed;        
     }
     DL_TimerA_setCaptureCompareValue(m->pmw_tiemr, (Max_Speed - abs_speed),m->cc_index);
-    debug_once('Y');
+    //debug_once('Y');
+}
+
+volatile int32_t right_cnt = 0;
+volatile uint32_t right_isr_cnt = 0;
+
+void GROUP1_IRQHandler(void)
+{
+    uint32_t mis = DL_GPIO_getEnabledInterruptStatus(GPIOB, Right_Encoder_A_PIN);
+
+    if (mis) {
+        right_isr_cnt++;
+        if (DL_GPIO_readPins(GPIOB, Right_Encoder_B_PIN)) {
+            right_cnt--;
+        } else {
+            right_cnt++;
+        }
+        DL_GPIO_clearInterruptStatus(GPIOB, Right_Encoder_A_PIN);
+    }
+
+    DL_Interrupt_clearGroup(DL_INTERRUPT_GROUP_1, DL_INTERRUPT_GROUP1_IIDX_GPIOB);
 }
