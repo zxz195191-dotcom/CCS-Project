@@ -2,8 +2,8 @@
 #include "headfile.h"
 
 typedef enum{
-    Left_Wheel = 0,
-    Right_Wheel,
+    Right_Wheel = 0,
+    Left_Wheel,
     Wheel_count
 }Motor_ID_e;
 

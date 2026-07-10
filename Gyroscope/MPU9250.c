@@ -117,22 +117,17 @@ uint8_t MPU9250_Read_Reg(uint8_t dev_addr, uint8_t reg_addr) {
     // 1. TX 阶段：发寄存器地址，强行扣留 STOP
     // ==========================================
     DL_I2C_fillControllerTXFIFO(I2C_0_INST, &reg_addr, 1);
-    
 
-/*
-@brief Sets up a transfer from I2C controller with control of START,
-STOP and ACK
-*/  DL_I2C_startControllerTransferAdvanced(
-        I2C_0_INST, 
-        dev_addr, 
-        DL_I2C_CONTROLLER_DIRECTION_TX, 
+    DL_I2C_startControllerTransferAdvanced(
+        I2C_0_INST,
+        dev_addr,
+        DL_I2C_CONTROLLER_DIRECTION_TX,
         1,
         DL_I2C_CONTROLLER_START_ENABLE,
-        DL_I2C_CONTROLLER_STOP_DISABLE,   // <--- 不发 STOP，霸占总线！
-        DL_I2C_CONTROLLER_ACK_ENABLE         // <--- 期待从机给出 ACK
+        DL_I2C_CONTROLLER_STOP_DISABLE,   // 不发 STOP，霸占总线
+        DL_I2C_CONTROLLER_ACK_ENABLE
     );
 
-    // 【核心修复】：绝对不能等 BUSY_BUS！只能等 TX_DONE 中断标志！
     uint32_t timeout = 100000;
     while (!(DL_I2C_getRawInterruptStatus(I2C_0_INST, DL_I2C_INTERRUPT_CONTROLLER_TX_DONE))) {
         if (DL_I2C_getRawInterruptStatus(I2C_0_INST, DL_I2C_INTERRUPT_CONTROLLER_NACK)) {
@@ -148,13 +143,13 @@ STOP and ACK
     // 2. RX 阶段：带着 Repeated Start 开始读数据
     // ==========================================
     DL_I2C_startControllerTransferAdvanced(
-        I2C_0_INST, 
-        dev_addr, 
-        DL_I2C_CONTROLLER_DIRECTION_RX, 
+        I2C_0_INST,
+        dev_addr,
+        DL_I2C_CONTROLLER_DIRECTION_RX,
         1,
-        DL_I2C_CONTROLLER_START_ENABLE,   // <--- 因为没发 STOP，硬件自动将其变为 Sr (重复起始)
-        DL_I2C_CONTROLLER_STOP_ENABLE,    // <--- 这次读完，可以发 STOP 释放总线了
-        DL_I2C_CONTROLLER_ACK_DISABLE        // <--- I2C规范：主控读最后一个字节必须给 NACK
+        DL_I2C_CONTROLLER_START_ENABLE,   // 硬件自动将其变为 Sr (重复起始)
+        DL_I2C_CONTROLLER_STOP_ENABLE,    // 读完发 STOP 释放总线
+        DL_I2C_CONTROLLER_ACK_DISABLE     // 读最后一个字节给 NACK
     );
 
     // 等待 RX 接收完成标志
@@ -176,7 +171,7 @@ STOP and ACK
         return 0xEE; // 最极端的硬件 Bug
     }
 
-    delay_cycles(32000); 
+    delay_cycles(32000);
     return data;
 }
 
@@ -184,12 +179,12 @@ STOP and ACK
 
 uint8_t MPU9250_Write_Reg(uint8_t dev_addr, uint8_t reg_addr, uint8_t data) {
     uint8_t tx_buf[2] = {reg_addr, data};
-    
+
     DL_I2C_clearInterruptStatus(I2C_0_INST, 0xFFFFFFFF);
 
     // 把寄存器地址和数据一起塞进 FIFO，长度为 2
     DL_I2C_fillControllerTXFIFO(I2C_0_INST, tx_buf, 2);
-    
+
     // 启动普通写传输（写完会自动发 STOP 释放总线）
     DL_I2C_startControllerTransfer(I2C_0_INST, dev_addr, DL_I2C_CONTROLLER_DIRECTION_TX, 2);
 
@@ -198,10 +193,12 @@ uint8_t MPU9250_Write_Reg(uint8_t dev_addr, uint8_t reg_addr, uint8_t data) {
     while (!(DL_I2C_getRawInterruptStatus(I2C_0_INST, DL_I2C_INTERRUPT_CONTROLLER_TX_DONE))) {
         if (DL_I2C_getRawInterruptStatus(I2C_0_INST, DL_I2C_INTERRUPT_CONTROLLER_NACK)) {
             DL_I2C_resetControllerTransfer(I2C_0_INST);
-            return 1; // 写入被拒收，失败
+            DL_I2C_flushControllerTXFIFO(I2C_0_INST);
+            DL_I2C_clearInterruptStatus(I2C_0_INST, 0xFFFFFFFF);
+            return 1;  // 收到NACK
         }
-        if (--timeout == 0) return 2; // 卡死
-    }
+        if (--timeout == 0) return 2; //什么都没收到 
+    }//收到ACK
 
     return 0; // 成功！
 }
@@ -239,13 +236,63 @@ void MPU9250_Read_All_Axis(MPU9250_Data_t *dat){
     for(uint8_t i = 0; i < num ; i++){
         dat->gyro_dps[i] = (float)(dat->gyro_raw[i] / 131.0f);
     }
+
 }
+
+
 
 void MPU9250_Init(void){
+    // 唤醒 MPU6500
     MPU9250_Write_Reg(0x68, 0x6B, 0x00);
     delay_cycles(320000);
-}
 
+    // 关掉内部 I2C 主机，防止抢控制权
+    MPU9250_Write_Reg(0x68, 0x6A, 0x00);
+    delay_cycles(320000);
+
+    // 开启 Bypass 旁路模式，让 0x0C 暴露出来！
+    MPU9250_Write_Reg(0x68, 0x37, 0x02);
+    delay_cycles(320000);
+
+    // 重置 AK8963 (必须先掉电，才能配新模式)
+    MPU9250_Write_Reg(0x0C, 0x0A, 0x00);
+    delay_cycles(320000); 
+
+    // 开启 AK8963 16位高精度, 100Hz 连测
+    MPU9250_Write_Reg(0x0C, 0x0A, 0x16);
+    delay_cycles(320000); 
+}
+// void MPU9250_Init(void){
+//     // ==========================================
+//     // 0. 强行软复位 (DEVICE_RESET = 1)
+//     // 强制芯片恢复出厂状态，消除上一次调试残留的 Bypass 状态
+//     // ==========================================
+//     MPU9250_Write_Reg(0x68, 0x6B, 0x80);
+//     delay_cycles(3200000); // 必须给它留足重启时间 (大概 100ms)
+
+//     // ==========================================
+//     // 1. 唤醒并选择最佳时钟源 (Auto PLL)
+//     // 0x01 比 0x00 更好，0x00 是内部20MHz晶振，0x01是自动选择最优陀螺仪时钟
+//     // ==========================================
+//     MPU9250_Write_Reg(0x68, 0x6B, 0x01);
+//     delay_cycles(320000);
+
+//     // 2. 关掉内部 I2C 主机，防止抢控制权
+//     MPU9250_Write_Reg(0x68, 0x6A, 0x00);
+//     delay_cycles(320000);
+
+//     // 3. 开启 Bypass 旁路模式，让 0x0C 暴露出来！
+//     MPU9250_Write_Reg(0x68, 0x37, 0x02);
+//     delay_cycles(320000);
+
+//     // 4. 重置 AK8963 (必须先掉电，才能配新模式)
+//     MPU9250_Write_Reg(0x0C, 0x0A, 0x00);
+//     delay_cycles(320000); 
+
+//     // 5. 开启 AK8963 16位高精度, 100Hz 连测
+//     MPU9250_Write_Reg(0x0C, 0x0A, 0x16);
+//     delay_cycles(320000); 
+// }
 
 /*整个函数就是为了完成这一串动作。
 START -> 0x68 + Write -> ACK -> 0x75(寄存器地址) -> ACK -> Repeated START -> 0x68 + Read
@@ -255,58 +302,172 @@ START -> 0x68 + Write -> ACK -> 0x75(寄存器地址) -> ACK -> Repeated START -
  -> NACK -> STOP
 */
 
-void MPU9250_Read_Len(  ){
-// 1. 发送首寄存器地址 (强行扣留 STOP)
-    DL_I2C_clearInterruptStatus(I2C_0_INST, 0xFFFFFFFF);//->处理9250内部的寄存器
-    //XXXX错误//9250里面会有很多用于判断状态的标志位 R/TX_DONE；NACK；ARBITRATION LOST；STOP ；START
-    //--->清除 MSPM0 I2C 控制器内部的中断状态寄存器。这些标志属于 MSPM0，不属于 MPU9250。
-
-    //如果第一次发送完成 第二次想要再次接收9250发送的数据 就必须要把发送完成标志位清理干净（上一轮结束之后tx_done = 1）
+uint8_t MPU9250_Read_Len(uint8_t dev_addr, uint8_t reg_addr, uint8_t len, uint8_t *buf) {
+    // 阶段 1：发首地址，不发 STOP
+    DL_I2C_clearInterruptStatus(I2C_0_INST, 0xFFFFFFFF);
     DL_I2C_flushControllerTXFIFO(I2C_0_INST);
-    DL_I2C_fillControllerTXFIFO(I2C_0_INST, &reg_addr, 1);
     
+    DL_I2C_fillControllerTXFIFO(I2C_0_INST, &reg_addr, 1);
     DL_I2C_startControllerTransferAdvanced(I2C_0_INST, dev_addr, DL_I2C_CONTROLLER_DIRECTION_TX, 1,
-        DL_I2C_CONTROLLER_START_ENABLE, DL_I2C_CONTROLLER_STOP_DISABLE, DL_I2C_CONTROLLER_ACK_ENABLE);
-    //普通的发送函数会在结尾附带stop （但是这才是 0x68 + Read -> ACK -> Data1 -> Data2 -> ACK需要的流程）
-   //或者说 普通的发送函数就是默认内部 STOP = ENABLE
-   /*普通发送接口内部默认：
-    START_ENABLE
-    STOP_ENABLE
-    ACK_ENABLE
-    因此一次传输结束后会自动发送 STOP。
-    而读取寄存器需要 Repeated START，因此这里必须关闭 STOP。*/
-  //这里就可以理解成Repeated START的实现
-
+        DL_I2C_CONTROLLER_START_ENABLE, DL_I2C_CONTROLLER_STOP_DISABLE, DL_I2C_CONTROLLER_ACK_DISABLE);
+    
     uint32_t timeout = 100000;
     while (!(DL_I2C_getRawInterruptStatus(I2C_0_INST, DL_I2C_INTERRUPT_CONTROLLER_TX_DONE))) {
-        if (--timeout == 0) return 1; // 卡死或 NACK
+        if (DL_I2C_getRawInterruptStatus(I2C_0_INST, DL_I2C_INTERRUPT_CONTROLLER_NACK) || --timeout == 0) {
+            DL_I2C_resetControllerTransfer(I2C_0_INST);
+            DL_I2C_flushControllerTXFIFO(I2C_0_INST);
+            DL_I2C_clearInterruptStatus(I2C_0_INST, 0xFFFFFFFF);
+            return 1; // 发送地址失败
+        }
     }
-    //必须要确定是否tx_done "cpu -> xMHz" "I2C -> 400KHz"cpu跑了几百轮 i2c可能连地址都还没发完
     
-    // 2. 发起连续读取任务，长度设置为请求的 len
+    // 阶段 2：带有 Repeated Start 的连读
     DL_I2C_clearInterruptStatus(I2C_0_INST, 0xFFFFFFFF);
-    //上面已经使用了tx_done 下面需要判断cpu是否rx_done 但是两个公用一个标志位 必须先清除
+    DL_I2C_flushControllerRXFIFO(I2C_0_INST);
     DL_I2C_startControllerTransferAdvanced(I2C_0_INST, dev_addr, DL_I2C_CONTROLLER_DIRECTION_RX, len,
-        DL_I2C_CONTROLLER_START_ENABLE, DL_I2C_CONTROLLER_STOP_ENABLE, DL_I2C_CONTROLLER_ACK_NACK);
-    //设置总长度len 然后 DL_I2C_CONTROLLER_ACK_NACK的意思就是 在到达len-1之前 一直ack 
-    //直到len-1 发送nack 此时数据传输结束
-
-
-    // 3. 边收边拿：守在流水线旁边，来一个拿一个，防止 FIFO 溢出卡死
+        DL_I2C_CONTROLLER_START_ENABLE, DL_I2C_CONTROLLER_STOP_ENABLE, DL_I2C_CONTROLLER_ACK_DISABLE);
+        
     uint8_t got_bytes = 0;
     timeout = 500000;
-    
     while (got_bytes < len) {
-       
-        if ( !DL_I2C_isControllerRXFIFOEmpty(I2C_0_INST) ) {
-           
+        if (!DL_I2C_isControllerRXFIFOEmpty(I2C_0_INST)) {
             buf[got_bytes] = DL_I2C_receiveControllerData(I2C_0_INST);
             got_bytes++;
         }
         
-        if (--timeout == 0) return 2; // 严重超时
+        if (DL_I2C_getRawInterruptStatus(I2C_0_INST, DL_I2C_INTERRUPT_CONTROLLER_NACK) || --timeout == 0) {
+            DL_I2C_resetControllerTransfer(I2C_0_INST);
+            DL_I2C_flushControllerRXFIFO(I2C_0_INST);
+            DL_I2C_clearInterruptStatus(I2C_0_INST, 0xFFFFFFFF);
+            return 2; // 接收数据失败
+        }
+    }
+    delay_cycles(32000); 
+    return 0; // 成功！
+}
+
+
+
+void MPU9250_Read_All_Axis_Plus(MPU9250_Data_t *dat){
+    //Acc6 + temp2 + Gyr6 = 14
+    uint8_t buffer[14];
+
+    //consist reading
+    if(MPU9250_Read_Len(MPU_ADDR, MPU_REG, LEN, buffer) != 0) {
+        return;//如果读取失败 还能保留上一次的数据（防止车子抽搐）
+    }
+
+    dat->accel_raw[0] = (int16_t)((buffer[0] << 8) | buffer[1]);
+    dat->accel_raw[1] = (int16_t)((buffer[2] << 8) | buffer[3]);
+    dat->accel_raw[2] = (int16_t)((buffer[4] << 8) | buffer[5]);
+
+    dat->gyro_raw[0] = (int16_t)((buffer[8] << 8) | buffer[9]);
+    dat->gyro_raw[1] = (int16_t)((buffer[10] << 8) | buffer[11]);
+    dat->gyro_raw[2] = (int16_t)((buffer[12] << 8) | buffer[13]);
+
+    for (uint8_t i = 0; i < 3; i++) {//0 x   1 y   2 z
+        dat->accel_g[i]   = (float)dat->accel_raw[i] / 16384.0f;
+        dat->gyro_dps[i]  = (float)dat->gyro_raw[i] / 131.0f;
+    }
+
+
+    // ==========================================
+    // 3. 读取磁力计 (AK8963)
+    // ==========================================
+    // ---------- 读 AK8963 (三轴磁力) ----------
+    uint8_t mag_buffer[8]; 
+    // 必须从 ST1 (0x02) 开始读 8 个字节
+    if (MPU9250_Read_Len(0x0C, 0x02, 8, mag_buffer) == 0) {
+        // 检查 ST1 状态寄存器的最低位 (DRDY: Data Ready)
+        if (mag_buffer[0] & 0x01) { 
+            // 小端模式拼接：低字节在前，高字节在后
+            dat->mag_raw[x] = (int16_t)((mag_buffer[2] << 8) | mag_buffer[1]);
+            dat->mag_raw[y] = (int16_t)((mag_buffer[4] << 8) | mag_buffer[3]);
+            dat->mag_raw[z] = (int16_t)((mag_buffer[6] << 8) | mag_buffer[5]);
+
+            dat->mag_uT[x] = (float)dat->mag_raw[x] * 0.15f;
+            dat->mag_uT[y] = (float)dat->mag_raw[y] * 0.15f;
+            dat->mag_uT[z] = (float)dat->mag_raw[z] * 0.15f;
+        }
+    }
+}
+
+
+
+void MPU9250_Read_All_Axis_Plus_Pro(MPU9250_Data_t *dat){
+    uint8_t buf[14];
+    uint8_t mag_buf[8];
+
+    if(MPU9250_Read_Len(MPU_ADDR, MPU_REG, LEN, buffer) != 0) {
+        return;//如果读取失败 还能保留上一次的数据（防止车子抽搐）
+    }
+
+    dat->accel_g[x] = (int16_t)((buf[0] << 8) | buf[1]) * ACC_SCALE;
+    dat->accel_g[y] = (int16_t)((buf[2] << 8) | buf[3]) * ACC_SCALE;
+    dat->accel_g[z] = (int16_t)((buf[4] << 8) | buf[5]) * ACC_SCALE;
+
+    dat->gyro_dps[x] = (int16_t)((buf[8] << 8) | buf[9]) * GYR_SCALE_RAD;
+    dat->gyro_dps[y] = (int16_t)((buf[10] << 8) | buf[11]) * GYR_SCALE_RAD;
+    dat->gyro_dps[z] = (int16_t)((buf[12] << 8) | buf[13]) * GYR_SCALE_RAD;
+
+// 2. 读磁力计 (连读8字节)
+    if (MPU9250_Read_Len(0x0C, 0x02, 8, mag_buf) == 0) {
+        if (mag_buf[0] & 0x01) { 
+            // 磁力计是小端模式
+            dat->mag_uT[x] = (int16_t)((mag_buf[2] << 8) | mag_buf[1]) * MAG_SCALE;
+            dat->mag_uT[y] = (int16_t)((mag_buf[4] << 8) | mag_buf[3]) * MAG_SCALE;
+            dat->mag_uT[z] = (int16_t)((mag_buf[6] << 8) | mag_buf[5]) * MAG_SCALE;
+        }
     }
     
-    delay_cycles(32000); 
-    return 0; // 完美收工！
+
 }
+
+
+
+float mag_offset[3] = {0,0,0};//硬磁导致侧错位
+float mag_scale[3] = {0,0,0};//软磁铁导致的变形
+
+void Maf_calibration(void){
+    float max_mag[3] = {-9999.0f,-9999.0f,-9999.0f};
+    float min_mag[3] = {9999.0f,9999.0f,9999.0f};
+    char tx_buf[64];
+
+    sprintf(tx_buf, "\r\n[CAL] Start Mag Calibration!\r\n");
+    uart_transmit(tx_buf);
+    sprintf(tx_buf, "[CAL] Please spin the board in 8-shape...\r\n");
+    uart_transmit(tx_buf);
+
+    for(int i = 0; i < 1000;i++){
+
+        MPU9250_Read_All_Axis_Plus(&mpu_data);
+
+        for(int j = 0; j < 3;j++){
+            if(mpu_data.mag_uT[j] > max_mag[j]) max_mag[j] = mpu_data.mag_uT[j];
+            if(mpu_data.mag_uT[j] < min_mag[j]) min_mag[j] = mpu_data.mag_uT[j];
+        }        
+
+        if(i % 100 == 0){
+           
+            sprintf(tx_buf, "%d%%/r/n",i/10);
+            uart_transmit(tx_buf);
+        }
+        delay_cycles(320000);
+    }
+
+    for (int j = 0; j < 3; j++) {
+        //DL_UART_Main_transmitDataBlocking(UART1,'C');
+
+        mag_offset[j] = (max_mag[j] + min_mag[j]) / 2.0f;
+    }
+
+    sprintf(tx_buf, "\r\n[CAL] Done!\r\n");
+    uart_transmit(tx_buf);
+    sprintf(tx_buf, "Offset X: %.2f  Y: %.2f  Z: %.2f\r\n", mag_offset[0], mag_offset[1], mag_offset[2]);
+    uart_transmit(tx_buf);
+
+}
+
+/*const float MAG_OFFSET_X = 76.09f;
+const float MAG_OFFSET_Y = 27.86f;
+const float MAG_OFFSET_Z = 88.34f;*/

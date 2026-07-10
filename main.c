@@ -24,21 +24,27 @@ int main(void)
     DL_UART_Main_transmitDataBlocking(UART1,'A');
 
     char tx_buffer[64];
-
-   //Scan_I2C_Devices();
+ 
+    Scan_I2C_Devices();
     MPU9250_Init();
+   // Scan_I2C_Devices();
 
-    // Motor_Set_Speed(Left_Wheel, 100);
-    // Motor_Set_Speed(Right_Wheel, 100);
+    //Maf_calibration();
+
+    //Motor_Set_Speed(Left_Wheel, 1);
+    //Motor_Set_Speed(Right_Wheel, 1);
     while (1) {
 
-    MPU9250_Read_All_Axis(&mpu_data);
+    //MPU9250_Read_All_Axis_Plus(&mpu_data);
 
-    sprintf(tx_buffer, "%.2f,%.2f,%.2f,%.2f,%.2f,%.2f\r\n", mpu_data.accel_g[x],mpu_data.accel_g[y],
-    mpu_data.accel_g[z],mpu_data.gyro_dps[x],mpu_data.gyro_dps[y],mpu_data.gyro_dps[z]);
-    uart_transmit(tx_buffer);
 
-    delay_cycles(3200000);
+    // sprintf (tx_buffer, "%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f\r\n", 
+    // mpu_data.accel_g[x],mpu_data.accel_g[y],mpu_data.accel_g[z],
+    // mpu_data.gyro_dps[x],mpu_data.gyro_dps[y],mpu_data.gyro_dps[z],
+    // mpu_data.mag_uT[x],mpu_data.mag_uT[y],mpu_data.mag_uT[z] );
+    // uart_transmit(tx_buffer);
+
+   // delay_cycles(3200000);
 
         // char buf[64];
 
