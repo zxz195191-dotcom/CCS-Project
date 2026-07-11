@@ -76,7 +76,7 @@ void Scan_I2C_Devices(void) {
         DL_I2C_clearInterruptStatus(I2C_0_INST, 0xFFFFFFFF);
 
         // 给物理总线留 2~3 毫秒彻底释放电平
-        delay_cycles(96000); 
+        delay_cycles(96000);
     }
     
     sprintf(buffer, "Scan Complete.\r\n");
@@ -205,39 +205,39 @@ uint8_t MPU9250_Write_Reg(uint8_t dev_addr, uint8_t reg_addr, uint8_t data) {
 
 MPU9250_Data_t mpu_data = {0};
 
-void MPU9250_Read_All_Axis(MPU9250_Data_t *dat){    
+ void MPU9250_Read_All_Axis(MPU9250_Data_t *dat){    
 
-    uint8_t accel_x_h = MPU9250_Read_Reg(0x68, 0x3B);
-    uint8_t accel_x_l = MPU9250_Read_Reg(0x68, 0x3C);
-    uint8_t accel_y_h = MPU9250_Read_Reg(0x68, 0x3D);
-    uint8_t accel_y_l = MPU9250_Read_Reg(0x68, 0x3E);
-    uint8_t accel_z_h = MPU9250_Read_Reg(0x68, 0x3F);
-    uint8_t accel_z_l = MPU9250_Read_Reg(0x68, 0x40);
+//     uint8_t accel_x_h = MPU9250_Read_Reg(0x68, 0x3B);
+//     uint8_t accel_x_l = MPU9250_Read_Reg(0x68, 0x3C);
+//     uint8_t accel_y_h = MPU9250_Read_Reg(0x68, 0x3D);
+//     uint8_t accel_y_l = MPU9250_Read_Reg(0x68, 0x3E);
+//     uint8_t accel_z_h = MPU9250_Read_Reg(0x68, 0x3F);
+//     uint8_t accel_z_l = MPU9250_Read_Reg(0x68, 0x40);
 
-    dat->accel_raw[x] = (int16_t)((accel_x_h << 8) | accel_x_l);
-    dat->accel_raw[y] = (int16_t)((accel_y_h << 8) | accel_y_l);
-    dat->accel_raw[z] = (int16_t)((accel_z_h << 8) | accel_z_l);
+//     dat->accel_raw[x] = (int16_t)((accel_x_h << 8) | accel_x_l);
+//     dat->accel_raw[y] = (int16_t)((accel_y_h << 8) | accel_y_l);
+//     dat->accel_raw[z] = (int16_t)((accel_z_h << 8) | accel_z_l);
 
-    for(uint8_t i = 0; i < num ; i++){
-        dat->accel_g[i] = (float)(dat->accel_raw[i] / 16384.0f);
-    }
+//     for(uint8_t i = 0; i < num ; i++){
+//         dat->accel_g[i] = (float)(dat->accel_raw[i] / 16384.0f);
+//     }
 
-    uint8_t gyro_x_h = MPU9250_Read_Reg(0x68, 0x43);
-    uint8_t gyro_x_l = MPU9250_Read_Reg(0x68, 0x44);
-    uint8_t gyro_y_h = MPU9250_Read_Reg(0x68, 0x45);
-    uint8_t gyro_y_l = MPU9250_Read_Reg(0x68, 0x46);
-    uint8_t gyro_z_h = MPU9250_Read_Reg(0x68, 0x47);
-    uint8_t gyro_z_l = MPU9250_Read_Reg(0x68, 0x48);
+//     uint8_t gyro_x_h = MPU9250_Read_Reg(0x68, 0x43);
+//     uint8_t gyro_x_l = MPU9250_Read_Reg(0x68, 0x44);
+//     uint8_t gyro_y_h = MPU9250_Read_Reg(0x68, 0x45);
+//     uint8_t gyro_y_l = MPU9250_Read_Reg(0x68, 0x46);
+//     uint8_t gyro_z_h = MPU9250_Read_Reg(0x68, 0x47);
+//     uint8_t gyro_z_l = MPU9250_Read_Reg(0x68, 0x48);
 
-    dat->gyro_raw[x] = (int16_t)((gyro_x_h << 8) | gyro_x_l);
-    dat->gyro_raw[y] = (int16_t)((gyro_y_h << 8) | gyro_y_l);
-    dat->gyro_raw[z] = (int16_t)((gyro_z_h << 8) | gyro_z_l);
+//     dat->gyro_raw[x] = (int16_t)((gyro_x_h << 8) | gyro_x_l);
+//     dat->gyro_raw[y] = (int16_t)((gyro_y_h << 8) | gyro_y_l);
+//     dat->gyro_raw[z] = (int16_t)((gyro_z_h << 8) | gyro_z_l);
 
-    for(uint8_t i = 0; i < num ; i++){
-        dat->gyro_dps[i] = (float)(dat->gyro_raw[i] / 131.0f);
-    }
+//     for(uint8_t i = 0; i < num ; i++){
+//         dat->gyro_dps[i] = (float)(dat->gyro_raw[i] / 131.0f);
+//     }
 
-}
+ }
 
 
 
@@ -309,7 +309,7 @@ uint8_t MPU9250_Read_Len(uint8_t dev_addr, uint8_t reg_addr, uint8_t len, uint8_
     
     DL_I2C_fillControllerTXFIFO(I2C_0_INST, &reg_addr, 1);
     DL_I2C_startControllerTransferAdvanced(I2C_0_INST, dev_addr, DL_I2C_CONTROLLER_DIRECTION_TX, 1,
-        DL_I2C_CONTROLLER_START_ENABLE, DL_I2C_CONTROLLER_STOP_DISABLE, DL_I2C_CONTROLLER_ACK_DISABLE);
+        DL_I2C_CONTROLLER_START_ENABLE, DL_I2C_CONTROLLER_STOP_DISABLE, DL_I2C_CONTROLLER_ACK_ENABLE);
     
     uint32_t timeout = 100000;
     while (!(DL_I2C_getRawInterruptStatus(I2C_0_INST, DL_I2C_INTERRUPT_CONTROLLER_TX_DONE))) {
@@ -342,7 +342,7 @@ uint8_t MPU9250_Read_Len(uint8_t dev_addr, uint8_t reg_addr, uint8_t len, uint8_
             return 2; // 接收数据失败
         }
     }
-    delay_cycles(32000); 
+    delay_cycles(32000);
     return 0; // 成功！
 }
 
@@ -353,7 +353,7 @@ void MPU9250_Read_All_Axis_Plus(MPU9250_Data_t *dat){
     uint8_t buffer[14];
 
     //consist reading
-    if(MPU9250_Read_Len(MPU_ADDR, MPU_REG, LEN, buffer) != 0) {
+    if(MPU9250_Read_Len(MPU_ADDR, MPU_REG, 14, buffer) != 0) {
         return;//如果读取失败 还能保留上一次的数据（防止车子抽搐）
     }
 
@@ -394,80 +394,35 @@ void MPU9250_Read_All_Axis_Plus(MPU9250_Data_t *dat){
 
 
 
-void MPU9250_Read_All_Axis_Plus_Pro(MPU9250_Data_t *dat){
+void MPU9250_Read_All_Axis_Plus_Pro(MPU9250_Data_t *dat) {
     uint8_t buf[14];
     uint8_t mag_buf[8];
 
-    if(MPU9250_Read_Len(MPU_ADDR, MPU_REG, LEN, buffer) != 0) {
-        return;//如果读取失败 还能保留上一次的数据（防止车子抽搐）
+    // 读取六轴 (14字节)
+    if(MPU9250_Read_Len(MPU_ADDR, MPU_REG, 14, buf) != 0) {
+        return; // 如果读取失败 还能保留上一次的数据（防止车子抽搐）
     }
 
+    // 加速度计算：直接位运算拼装并乘以 ACC_SCALE
     dat->accel_g[x] = (int16_t)((buf[0] << 8) | buf[1]) * ACC_SCALE;
     dat->accel_g[y] = (int16_t)((buf[2] << 8) | buf[3]) * ACC_SCALE;
     dat->accel_g[z] = (int16_t)((buf[4] << 8) | buf[5]) * ACC_SCALE;
 
-    dat->gyro_dps[x] = (int16_t)((buf[8] << 8) | buf[9]) * GYR_SCALE_RAD;
-    dat->gyro_dps[y] = (int16_t)((buf[10] << 8) | buf[11]) * GYR_SCALE_RAD;
-    dat->gyro_dps[z] = (int16_t)((buf[12] << 8) | buf[13]) * GYR_SCALE_RAD;
+    // 陀螺仪计算：保留 dps 单位(乘以 GYRO_SCALE)
+    dat->gyro_dps[x] = (int16_t)((buf[8] << 8)  | buf[9])  * GYRO_SCALE;
+    dat->gyro_dps[y] = (int16_t)((buf[10] << 8) | buf[11]) * GYRO_SCALE;
+    dat->gyro_dps[z] = (int16_t)((buf[12] << 8) | buf[13]) * GYRO_SCALE;
 
-// 2. 读磁力计 (连读8字节)
-    if (MPU9250_Read_Len(0x0C, 0x02, 8, mag_buf) == 0) {
+    // 读取磁力计 (8字节，小端模式)
+    if (MPU9250_Read_Len(MAG_ADDR, 0x02, 8, mag_buf) == 0) {
         if (mag_buf[0] & 0x01) { 
-            // 磁力计是小端模式
+            // 磁力计是小端模式，低位在前！
             dat->mag_uT[x] = (int16_t)((mag_buf[2] << 8) | mag_buf[1]) * MAG_SCALE;
             dat->mag_uT[y] = (int16_t)((mag_buf[4] << 8) | mag_buf[3]) * MAG_SCALE;
             dat->mag_uT[z] = (int16_t)((mag_buf[6] << 8) | mag_buf[5]) * MAG_SCALE;
         }
     }
-    
-
 }
 
 
 
-float mag_offset[3] = {0,0,0};//硬磁导致侧错位
-float mag_scale[3] = {0,0,0};//软磁铁导致的变形
-
-void Maf_calibration(void){
-    float max_mag[3] = {-9999.0f,-9999.0f,-9999.0f};
-    float min_mag[3] = {9999.0f,9999.0f,9999.0f};
-    char tx_buf[64];
-
-    sprintf(tx_buf, "\r\n[CAL] Start Mag Calibration!\r\n");
-    uart_transmit(tx_buf);
-    sprintf(tx_buf, "[CAL] Please spin the board in 8-shape...\r\n");
-    uart_transmit(tx_buf);
-
-    for(int i = 0; i < 1000;i++){
-
-        MPU9250_Read_All_Axis_Plus(&mpu_data);
-
-        for(int j = 0; j < 3;j++){
-            if(mpu_data.mag_uT[j] > max_mag[j]) max_mag[j] = mpu_data.mag_uT[j];
-            if(mpu_data.mag_uT[j] < min_mag[j]) min_mag[j] = mpu_data.mag_uT[j];
-        }        
-
-        if(i % 100 == 0){
-           
-            sprintf(tx_buf, "%d%%/r/n",i/10);
-            uart_transmit(tx_buf);
-        }
-        delay_cycles(320000);
-    }
-
-    for (int j = 0; j < 3; j++) {
-        //DL_UART_Main_transmitDataBlocking(UART1,'C');
-
-        mag_offset[j] = (max_mag[j] + min_mag[j]) / 2.0f;
-    }
-
-    sprintf(tx_buf, "\r\n[CAL] Done!\r\n");
-    uart_transmit(tx_buf);
-    sprintf(tx_buf, "Offset X: %.2f  Y: %.2f  Z: %.2f\r\n", mag_offset[0], mag_offset[1], mag_offset[2]);
-    uart_transmit(tx_buf);
-
-}
-
-/*const float MAG_OFFSET_X = 76.09f;
-const float MAG_OFFSET_Y = 27.86f;
-const float MAG_OFFSET_Z = 88.34f;*/
