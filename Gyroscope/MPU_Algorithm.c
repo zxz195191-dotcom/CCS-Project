@@ -90,8 +90,8 @@ const float MAG_OFFSET_Z = 88.34f;*/
 
 
 /* ========== 1. 算法参数 ========== */
-#define Kp 3.5f      // 比例增益：控制收敛速度
-#define Ki 0.005f    // 积分增益：消除陀螺仪零漂
+volatile float g_Kp = 3.0f;      // 比例增益：控制收敛速度
+volatile float g_Ki = 0.005f;    // 积分增益：消除陀螺仪零漂
 
 /* ========== 2. 内部状态与输出 ========== */
 float q0 = 1.0f, q1 = 0.0f, q2 = 0.0f, q3 = 0.0f;   // 四元数
@@ -160,14 +160,14 @@ void MahonyAHRSupdate(float gx, float gy, float gz,   // 陀螺仪 rad/s
     ez = (ax*vy - ay*vx) + (mx*wy - my*wx);
 
     // 6. PI 补偿（消除陀螺仪漂移）
-    if (Ki > 0.0f) {
-        exInt += ex * Ki * dt;
-        eyInt += ey * Ki * dt;
-        ezInt += ez * Ki * dt;
+    if (g_Ki > 0.0f) {
+        exInt += ex * g_Ki * dt;
+        eyInt += ey * g_Ki * dt;
+        ezInt += ez * g_Ki * dt;
     }
-    gx += Kp * ex + exInt;
-    gy += Kp * ey + eyInt;
-    gz += Kp * ez + ezInt;
+    gx += g_Kp * ex + exInt;
+    gy += g_Kp * ey + eyInt;
+    gz += g_Kp * ez + ezInt;
 
     // 7. 用校正后的角速度更新四元数
     gx *= (0.5f * dt);

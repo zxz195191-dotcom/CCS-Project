@@ -10,3 +10,6 @@
 #include "MPU9250.h"
 #include "math.h"
 #include "MPU_Algorithm.h"
+#include "cmd_parser.h"
+#include "../OLED/oled_hardware_i2c.h"
+#include "../OLED/oledfont.h"

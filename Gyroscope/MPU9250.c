@@ -311,7 +311,7 @@ uint8_t MPU9250_Read_Len(uint8_t dev_addr, uint8_t reg_addr, uint8_t len, uint8_
     DL_I2C_startControllerTransferAdvanced(I2C_0_INST, dev_addr, DL_I2C_CONTROLLER_DIRECTION_TX, 1,
         DL_I2C_CONTROLLER_START_ENABLE, DL_I2C_CONTROLLER_STOP_DISABLE, DL_I2C_CONTROLLER_ACK_ENABLE);
     
-    uint32_t timeout = 100000;
+    uint32_t timeout = 10000;//100000
     while (!(DL_I2C_getRawInterruptStatus(I2C_0_INST, DL_I2C_INTERRUPT_CONTROLLER_TX_DONE))) {
         if (DL_I2C_getRawInterruptStatus(I2C_0_INST, DL_I2C_INTERRUPT_CONTROLLER_NACK) || --timeout == 0) {
             DL_I2C_resetControllerTransfer(I2C_0_INST);
@@ -342,7 +342,7 @@ uint8_t MPU9250_Read_Len(uint8_t dev_addr, uint8_t reg_addr, uint8_t len, uint8_
             return 2; // 接收数据失败
         }
     }
-    delay_cycles(32000);
+    //delay_cycles(32000);
     return 0; // 成功！
 }
 
