@@ -343,5 +343,163 @@ void OLED_Init(void)
     OLED_WR_Byte(0xA4,OLED_CMD);// Disable Entire Display On (0xa4/0xa5)
     OLED_WR_Byte(0xA6,OLED_CMD);// Disable Inverse Display On (0xa6/a7) 
     OLED_Clear();
-    OLED_WR_Byte(0xAF,OLED_CMD); /*display ON*/ 
-}  
+    OLED_WR_Byte(0xAF,OLED_CMD); /*display ON*/
+}
+
+/* ================================================================
+ *  开机校准菜单 — 封装进 OLED 驱动，供 main.c 一行调用
+ *  返回: 1=做了精校准, 0=只用快速校准
+ * ================================================================ */
+#include "MPU_Algorithm.h"  /* Gyro_Calibrate_Bias, gyro_bias */
+#include <stdio.h>
+
+void OLED_Startup_Calib_Gyro(void)
+{
+    const char *dots[] = {"Calibrating.  ", "Calibrating.. ", "Calibrating..."};
+    float sx = 0, sy = 0, sz = 0;
+    uint16_t total = 0;
+
+    OLED_Clear();
+    for (uint8_t s = 0; s < 6; s++) {
+        OLED_ShowString(10, 3, (uint8_t*)dots[s % 3], 16);
+        for (uint16_t i = 0; i < 500; i++) {
+            MPU9250_Read_All_Axis_Plus_Pro(&mpu_data);
+            sx += mpu_data.gyro_dps[x];
+            sy += mpu_data.gyro_dps[y];
+            sz += mpu_data.gyro_dps[z];
+            delay_cycles(32000);
+        }
+        total += 500;
+    }
+    gyro_bias[x] = sx / (float)total;
+    gyro_bias[y] = sy / (float)total;
+    gyro_bias[z] = sz / (float)total;
+    OLED_Clear();
+}
+
+/* ================================================================
+ *  旋转编码器 + 按钮状态机 + 菜单框架
+ *  (PB2=A相, PB3=B相, PB13=按键)
+ * ================================================================ */
+
+/* ── 按钮事件 ── */
+typedef enum {
+    BTN_NONE = 0,
+    BTN_CLICK,
+    BTN_DOUBLE,
+    BTN_LONG,
+} ButtonEvent;
+
+/* ── 编码器：正交格雷码解码 ── */
+static uint8_t enc_last_ab = 0;
+
+void OLED_Encoder_Init(void)
+{
+    uint8_t a = DL_GPIO_readPins(GPIOB, Encoder_Knob__A_PIN) ? 1 : 0;
+    uint8_t b = DL_GPIO_readPins(GPIOB, Encoder_Knob__B_PIN) ? 1 : 0;
+    enc_last_ab = (a << 1) | b;
+}
+
+int8_t OLED_Encoder_Read(void)
+{
+    uint8_t a  = DL_GPIO_readPins(GPIOB, Encoder_Knob__A_PIN) ? 1 : 0;
+    uint8_t b  = DL_GPIO_readPins(GPIOB, Encoder_Knob__B_PIN) ? 1 : 0;
+    uint8_t ab = (a << 1) | b;
+    int8_t  ret = 0;
+
+    if (ab != enc_last_ab) {
+        uint8_t old = enc_last_ab;
+        enc_last_ab = ab;
+        if ((old == 0 && ab == 1) || (old == 1 && ab == 3) ||
+            (old == 3 && ab == 2) || (old == 2 && ab == 0)) ret = 1;
+        else if ((old == 0 && ab == 2) || (old == 2 && ab == 3) ||
+                 (old == 3 && ab == 1) || (old == 1 && ab == 0)) ret = -1;
+    }
+    return ret;
+}
+
+/* ── 按钮状态机 ── */
+#define BTN_TICK_MS  4
+#define BTN_LONG_MS  800
+#define BTN_DBL_MS   350
+
+ButtonEvent OLED_Button_Read(void)
+{
+    static uint16_t press_ticks = 0;
+    static uint16_t wait_ticks  = 0;
+    static uint8_t  state       = 0;
+    static uint8_t  long_fired  = 0;
+    uint8_t now = DL_GPIO_readPins(GPIOB, Encoder_Knob__Button_PIN) ? 1 : 0;
+
+    switch (state) {
+    case 0: /* IDLE */
+        if (now == 0) { press_ticks = 1; long_fired = 0; state = 1; }
+        break;
+    case 1: /* PRESS */
+        if (now == 0) {
+            press_ticks++;
+            if (press_ticks >= BTN_LONG_MS / BTN_TICK_MS && !long_fired)
+                { long_fired = 1; state = 0; return BTN_LONG; }
+        } else {
+            if (press_ticks >= 2) { wait_ticks = 1; state = 2; }
+            else state = 0;
+        }
+        break;
+    case 2: /* WAIT_CLICK */
+        if (now == 0) { press_ticks = 1; state = 3; }
+        else { wait_ticks++; if (wait_ticks >= BTN_DBL_MS / BTN_TICK_MS)
+               { state = 0; return BTN_CLICK; } }
+        break;
+    case 3: /* WAIT_DBL */
+        if (now == 1) { state = 0; return BTN_DOUBLE; }
+        break;
+    }
+    return BTN_NONE;
+}
+
+/* ── 菜单状态 ── */
+typedef enum {
+    MENU_PAGE = 0,
+    MENU_PARAM,
+    MENU_EDIT,
+} MenuState;
+
+static MenuState menu_state = MENU_PAGE;
+static int8_t    menu_page  = 0;
+static int8_t    menu_param = 0;
+static int8_t    menu_param_cnt[4];
+static float    *menu_val_ptr = NULL;
+static float     menu_val_step = 0.1f;
+
+void OLED_Menu_Tick(void)
+{
+    int8_t      enc = OLED_Encoder_Read();
+    ButtonEvent btn = OLED_Button_Read();
+
+    switch (menu_state) {
+    case MENU_PAGE:
+        if (enc) { menu_page += enc; if (menu_page < 0) menu_page = 3; menu_page %= 4; }
+        if (btn == BTN_CLICK) { menu_state = MENU_PARAM; menu_param = 0; }
+        break;
+    case MENU_PARAM:
+        if (enc) { menu_param += enc; if (menu_param < 0) menu_param = menu_param_cnt[menu_page]-1;
+                   menu_param %= menu_param_cnt[menu_page]; }
+        if (btn == BTN_CLICK) { menu_state = MENU_EDIT; }
+        if (btn == BTN_DOUBLE) { menu_state = MENU_PAGE; }
+        break;
+    case MENU_EDIT:
+        if (enc && menu_val_ptr) { *menu_val_ptr += (float)enc * menu_val_step; }
+        if (btn == BTN_CLICK) { menu_state = MENU_PARAM; }
+        if (btn == BTN_DOUBLE) { menu_state = MENU_PARAM; }
+        if (btn == BTN_LONG)  { if (menu_val_ptr) *menu_val_ptr = 0.0f; }
+        break;
+    }
+}
+
+void OLED_Menu_Register(uint8_t page, uint8_t param_cnt)
+    { if (page < 4) menu_param_cnt[page] = param_cnt; }
+void OLED_Menu_SetEdit(float *val_ptr, float step)
+    { menu_val_ptr = val_ptr; menu_val_step = step; }
+MenuState OLED_Menu_GetState(void)  { return menu_state; }
+int8_t    OLED_Menu_GetPage(void)   { return menu_page; }
+int8_t    OLED_Menu_GetParam(void)  { return menu_param; }

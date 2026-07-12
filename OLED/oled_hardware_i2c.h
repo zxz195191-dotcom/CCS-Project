@@ -46,4 +46,20 @@ void OLED_DrawBMP(uint8_t x,uint8_t y,uint8_t sizex, uint8_t sizey,uint8_t BMP[]
 void OLED_Init(void);
 void oled_i2c_sda_unlock(void);
 
+/* Gyro开机校准：3s*/
+void OLED_Startup_Calib_Gyro(void);
+
+/* 旋转编码器 + 按钮 + 菜单框架 */
+void        OLED_Encoder_Init(void);
+int8_t      OLED_Encoder_Read(void);              /* 1=CW, -1=CCW, 0=无 */
+uint8_t     OLED_Button_Read(void);               /* 0=NONE,1=CLICK,2=DOUBLE,3=LONG */
+
+void        OLED_Menu_Tick(void);                 /* 主循环每轮调用 */
+void        OLED_Menu_Register(uint8_t page, uint8_t param_cnt);
+void        OLED_Menu_SetEdit(float *val_ptr, float step);
+
+uint8_t     OLED_Menu_GetState(void);             /* 0=PAGE, 1=PARAM, 2=EDIT */
+int8_t      OLED_Menu_GetPage(void);
+int8_t      OLED_Menu_GetParam(void);
+
 #endif /* #ifndef __OLED_HARDWARE_I2C_H */
