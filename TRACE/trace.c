@@ -51,25 +51,18 @@ void CHx(uint8_t channel){
     switch(channel){
         case 0://000
             AD0_L; AD1_L; AD2_L; break;
-
         case 1://001
             AD0_H; AD1_L; AD2_L; break;
-
         case 2://010
             AD0_L; AD1_H; AD2_L; break;
-
         case 3://011
             AD0_H; AD1_H; AD2_L; break;
-
         case 4://100
             AD0_L; AD1_L; AD2_H; break;
-
         case 5://101
             AD0_H; AD1_L; AD2_H; break;
-
         case 6://110
             AD0_L; AD1_H; AD2_H; break;
-
         case 7://111
             AD0_H; AD1_H; AD2_H; break;
         default: break;
@@ -106,28 +99,84 @@ void trace_readByADC(){
         CHx(cur_ch);
 }
 
+
+// 定义最大可能的 Error 值，用于丢线时极限救车
+#define MAX_TRACE_ERROR 60 
 /*
 加权平均（重心法）
 Error =  \frac{\sum (\text{传感器电压值} \times \text{对应权重})}{\sum \text{传感器电压值}}$$
 (分子是所有通道的加权和，分母是所有通道的电压总和)
+带阈值自适应
 */
 int32_t trace_get_error(Trace_OUT_t *t){
     int32_t numerator = 0;   // 分子（加权和）
     int32_t denominator = 0; // 分母（电压总和）
 
-    //设定死区 防止小数据干扰计算（0-4095 小于500的就不要了）
-    for (uint8_t i = 0; i < TRACE_SENSOR_COUNT; i++) {
-        int32_t tem_val = t[i].current_ADC;
-        if(tem_val < 500) tem_val = 0;
+    static int32_t last_valid_error = 0;
 
-        numerator += tem_val * t[i].weight;
-        denominator += tem_val;
+    int32_t max_val = 0;
+    int32_t min_val = 4095;
+
+    // int32_t raw_sum = 0;
+    // int32_t processed_val[TRACE_SENSOR_COUNT];
+
+    // //先判断黑白底
+    // for (uint8_t i = 0; i < TRACE_SENSOR_COUNT; i++) {
+    //     raw_sum += t[i].current_ADC;
+    // }
+
+    // //如果半数以上的传感器都看到白色 那返回来的adc数值会大很多
+    // //4095最大 那么8通道 4095*8/2 = 16300
+    // bool is_white = (raw_sum > 16300);
+
+    for(uint8_t i = 0; i < TRACE_SENSOR_COUNT ; i++){
+        if(t[i].current_ADC > max_val)  max_val = t[i].current_ADC ;
+        if(t[i].current_ADC < min_val)  min_val = t[i].current_ADC ;
     }
-        //如果车子飞出赛道 分母会->0 value->无穷
 
-        if(denominator == 0){return 0;}
 
+    if((max_val - min_val) < 800){ //说明没有扫到线
+        denominator = 0;//这和走到轨迹线外一样
+    }else{//
+        ///取极差0.333作为背景光噪音
+        //min就是所有传感器中最小的adc数值 可以直接看作环境的背景底噪（黑色背景）
+        //max则是最强反光（白色循迹线）
+        //极差则是"线"和"背景"的 对比度 对比度取1/3获得相对阈值
+        //将底噪和相对阈值结合  只有超出背景的信号才定义为有效
+        int32_t noise_threshold = min_val + (max_val - min_val) / 3;
+        
+        for(uint8_t i = 0; i < TRACE_SENSOR_COUNT ; i++){
+
+            int32_t tem_val = t[i].current_ADC;
+
+            if(tem_val > noise_threshold){//大于底部噪音 那就是真的“特征”
+                tem_val -= noise_threshold;
+            }else{
+                tem_val = 0;
+            }
+
+            numerator += tem_val * t[i].weight;
+            denominator += tem_val;
+        }
+
+    }
+
+    //超出赛道
+    if(denominator == 0){//回忆 上一刻循迹线的位置（越左边越小（小于零））
+
+        if(last_valid_error > 0){//右边
+            return MAX_TRACE_ERROR;//60
+        }else if(last_valid_error < 0){//左边
+            return -MAX_TRACE_ERROR;
+        }else{//开始就不再线上 随便走走 碰碰运气
+            return 0;
+        }
+        
+    }
+        //重心计算
         int32_t Error = numerator / denominator ;
+        //更新记忆
+        last_valid_error = Error;
         return Error;
     
 }

@@ -6,7 +6,9 @@
 #include "cmd_parser.h"
 
 /* 全局变量 — 目标速度，cmd_parser 通过 extern 引用 */
+/* 全局变量 */
 volatile float g_target_speed = 0.0f;
+volatile float g_K_steer      = 15.0f;   /* 转向灵敏度 */
 
 int main(void)
 {
@@ -40,36 +42,47 @@ int main(void)
     //OLED_Startup_Calib_Gyro();  /* 开机校准菜单 (OLED 驱动封装) */
     OLED_Encoder_Init();    /* 初始化旋钮编码器 */
     float p = 0.2f;
-    float i = 1.3f;
+    float i = 1.3f;//1.3比较跟手（速度环）
     PID_Init(&PID_Left,  p, i, 0.0f, 400.0f, 300.0f);
     PID_Init(&PID_Right, p, i, 0.0f, 400.0f, 300.0f);
 
     int32_t dL,dR;
 
-    /* ──── PID 速度闭环 ──── */
+    /* ──── PID 速度闭环 + 循迹转向 ──── */
     uint32_t last_pid = Micros();
     while (1) {
         uint32_t now_us = Micros();           /* ① 先采样 */
         if (now_us - last_pid >= 20000) {
-            float dt = (float)(now_us - last_pid) * 1e-6f;  /* ② dt≈0.02s */
+            float dt = (float)(now_us - last_pid) * 1e-6f;
             last_pid = now_us;
 
             /* 串口 kp/ki 实时生效 */
             PID_Left.Kp  = g_Kp;  PID_Left.Ki  = g_Ki;
             PID_Right.Kp = g_Kp;  PID_Right.Ki = g_Ki;
 
-            Motor_Get_Delta(&dL, &dR);                       /* ③ 编码器 */
+            /* 循迹 */
+            trace_readByADC();
+            float trace_err = (float)trace_get_error(sensors);
+            float steering = g_K_steer * trace_err * (g_target_speed / 1000.0f);
+            float target_L = (g_target_speed == 0.0f) ? 0.0f : g_target_speed + steering;
+            float target_R = (g_target_speed == 0.0f) ? 0.0f : g_target_speed - steering;
+            /* 限幅，防止转向过大 */
+            if (target_L < -4000) target_L = -4000;
+            if (target_L >  4000) target_L =  4000;
+            if (target_R < -4000) target_R = -4000;
+            if (target_R >  4000) target_R =  4000;
 
-            float speedL = (float)dL;                        /* ④ 脉冲/20ms */
+            Motor_Get_Delta(&dL, &dR);
+            float speedL = (float)dL;
             float speedR = (float)dR;
 
-            float pwm_left  = PID_Compute(&PID_Left,  g_target_speed, speedL, dt);
-            float pwm_right = PID_Compute(&PID_Right, g_target_speed, speedR, dt);
+            float pwm_left  = PID_Compute(&PID_Left,  target_L, speedL, dt);
+            float pwm_right = PID_Compute(&PID_Right, target_R, speedR, dt);
 
             Motor_Set_Speed(Left_Wheel,  (int32_t)pwm_left);
             Motor_Set_Speed(Right_Wheel, (int32_t)pwm_right);
 
-            uart_send_float4(g_target_speed, speedL, speedR, pwm_left);
+            uart_send_float4(g_target_speed, speedL, speedR, trace_err);
         }
         CMD_RX();
     }

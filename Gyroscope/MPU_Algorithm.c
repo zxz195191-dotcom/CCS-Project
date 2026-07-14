@@ -90,8 +90,8 @@ const float MAG_OFFSET_Z = 88.34f;*/
 
 
 /* ========== 1. 算法参数 ========== */
-volatile float g_Kp = 2.0f;      // 比例增益：控制收敛速度
-volatile float g_Ki = 0.0f;      // 积分增益：6轴模式下必须为0！
+volatile float g_Kp = 0.2f;      // 比例增益（与 main.c 同步）
+volatile float g_Ki = 1.3f;      // 积分增益（与 main.c 同步）
 
 /* ========== 2. 内部状态与输出 ========== */
 float q0 = 1.0f, q1 = 0.0f, q2 = 0.0f, q3 = 0.0f;   // 四元数

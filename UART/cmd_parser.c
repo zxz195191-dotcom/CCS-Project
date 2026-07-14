@@ -17,6 +17,7 @@ extern volatile float g_Ki;
 extern float gyro_bias[3];
 extern void Gyro_Calibrate_Bias(uint16_t samples);
 extern volatile float g_target_speed;
+extern volatile float g_K_steer;
 
 /* ── 前向声明 ── */
 static void cmd_push_char(char c);
@@ -163,12 +164,15 @@ static void cmd_execute(char *line)
     } else if (cmd_strcmp_nocase(cmd, "spd") == 0) {
         g_target_speed = val;
         cmd_respond_float("Speed", g_target_speed);
+    } else if (cmd_strcmp_nocase(cmd, "steer") == 0) {
+        g_K_steer = val;
+        cmd_respond_float("Steer", g_K_steer);
     } else if (cmd_strcmp_nocase(cmd, "reset") == 0) {
         g_Kp = 2.0f;
         g_Ki = 0.0f;
         cmd_reply("PID reset: Kp=2.0 Ki=0\r\n");
     } else {
-        cmd_reply("? [kp N] [ki N] [spd N] [cal] [bias] [show] [reset]\r\n");
+        cmd_reply("? [kp N] [ki N] [spd N] [steer N] [cal] [bias] [show] [reset]\r\n");
     }
 }
 
