@@ -242,14 +242,19 @@ MPU9250_Data_t mpu_data = {0};
 
 
 void MPU9250_Init(void){
-    // 唤醒 MPU6500
-    MPU9250_Write_Reg(0x68, 0x6B, 0x00);
+// 唤醒 MPU6500 (如果之前加了 0x80 软复位，保留它)
+    MPU9250_Write_Reg(0x68, 0x6B, 0x01); // Auto PLL
+    delay_cycles(320000);
+
+    // 【新增：解放陀螺仪封印！】
+    // 0x1B 是 GYRO_CONFIG 寄存器。写入 0x18 (二进制 0001 1000) 代表 ±2000 dps
+    MPU9250_Write_Reg(0x68, 0x1B, 0x18); 
+    // 0x1C 是 ACCEL_CONFIG 寄存器。写入 0x00 代表 ±2g (平时最灵敏)
+    MPU9250_Write_Reg(0x68, 0x1C, 0x00);
     delay_cycles(320000);
 
     // 关掉内部 I2C 主机，防止抢控制权
     MPU9250_Write_Reg(0x68, 0x6A, 0x00);
-    delay_cycles(320000);
-
     // 开启 Bypass 旁路模式，让 0x0C 暴露出来！
     MPU9250_Write_Reg(0x68, 0x37, 0x02);
     delay_cycles(320000);

@@ -90,8 +90,8 @@ const float MAG_OFFSET_Z = 88.34f;*/
 
 
 /* ========== 1. 算法参数 ========== */
-volatile float g_Kp = 3.0f;      // 比例增益：控制收敛速度
-volatile float g_Ki = 0.005f;    // 积分增益：消除陀螺仪零漂
+volatile float g_Kp = 2.0f;      // 比例增益：控制收敛速度
+volatile float g_Ki = 0.0f;      // 积分增益：6轴模式下必须为0！
 
 /* ========== 2. 内部状态与输出 ========== */
 float q0 = 1.0f, q1 = 0.0f, q2 = 0.0f, q3 = 0.0f;   // 四元数
@@ -184,15 +184,83 @@ void MahonyAHRSupdate(float gx, float gy, float gz,   // 陀螺仪 rad/s
     q0 *= norm; q1 *= norm; q2 *= norm; q3 *= norm;
 }
 
+/* ========== 4b. Mahony 6 轴融合 (无磁力计，yaw 相对角度) ========== */
+void MahonyAHRSupdateIMU(float gx, float gy, float gz,
+                          float ax, float ay, float az, float dt)
+{
+    float norm;
+    float vx, vy, vz;
+    float ex, ey, ez;
 
-/* ========== 5. 四元数 -> 欧拉角 ========== */
+    /* 归一化加速度计 */
+    if ((ax*ax + ay*ay + az*az) == 0.0f) return;
+    norm = invSqrt(ax*ax + ay*ay + az*az);
+    ax *= norm; ay *= norm; az *= norm;
+
+    /* 用当前姿态估算重力方向 */
+    vx = 2.0f * (q1*q3 - q0*q2);
+    vy = 2.0f * (q0*q1 + q2*q3);
+    vz = q0*q0 - q1*q1 - q2*q2 + q3*q3;
+
+    /* 叉积求误差（只有加速度计） */
+    ex = (ay*vz - az*vy);
+    ey = (az*vx - ax*vz);
+    ez = (ax*vy - ay*vx);
+
+    /* PI 补偿 */
+    if (g_Ki > 0.0f) {
+        exInt += ex * g_Ki * dt;
+        eyInt += ey * g_Ki * dt;
+        ezInt += ez * g_Ki * dt;
+    }
+    gx += g_Kp * ex + exInt;
+    gy += g_Kp * ey + eyInt;
+    gz += g_Kp * ez + ezInt;
+
+    /* 四元数更新 */
+    gx *= (0.5f * dt);
+    gy *= (0.5f * dt);
+    gz *= (0.5f * dt);
+    float qa = q0, qb = q1, qc = q2;
+    q0 += (-qb*gx - qc*gy - q3*gz);
+    q1 += (qa*gx + qc*gz - q3*gy);
+    q2 += (qa*gy - qb*gz + q3*gx);
+    q3 += (qa*gz + qb*gy - qc*gx);
+
+    /* 归一化 */
+    norm = invSqrt(q0*q0 + q1*q1 + q2*q2 + q3*q3);
+    q0 *= norm; q1 *= norm; q2 *= norm; q3 *= norm;
+}
+
+
+/* ========== 5. 四元数 -> 欧拉角 (含 Yaw 解缠) ========== */
 void ComputeEulerAngles(void) {
-    // 俯仰角 Pitch
+    static float prev_raw = 0.0f;     /* 上一帧 atan2f 原始值 */
+    static float yaw_full = 0.0f;     /* 解缠后的全量程 yaw */
+    float raw_yaw, delta;
+
+    /* 四元数数值保护：norm 严重偏离 1.0 → 数据已崩，重置 */
+    float qnorm = q0*q0 + q1*q1 + q2*q2 + q3*q3;
+    if (qnorm < 0.5f || qnorm > 2.0f) {
+        q0 = 1.0f; q1 = 0.0f; q2 = 0.0f; q3 = 0.0f;
+        exInt = 0.0f; eyInt = 0.0f; ezInt = 0.0f;
+        return;
+    }
+
     pitch = asinf(2.0f * (q0 * q2 - q1 * q3)) * 57.29578f;
-    // 横滚角 Roll
     roll  = atan2f(2.0f * (q0 * q1 + q2 * q3), q0*q0 - q1*q1 - q2*q2 + q3*q3) * 57.29578f;
-    // 航向角 Yaw
-    yaw   = atan2f(2.0f * (q1 * q2 + q0 * q3), q0*q0 + q1*q1 - q2*q2 - q3*q3) * 57.29578f;
+
+    /* Yaw 解缠：atan2f 只能输出 [-180,180]，跨边界时自动补 360° */
+    raw_yaw = atan2f(2.0f * (q1 * q2 + q0 * q3),
+                     q0*q0 + q1*q1 - q2*q2 - q3*q3) * 57.29578f;
+
+    delta = raw_yaw - prev_raw;
+    if      (delta >  180.0f) delta -= 360.0f;
+    else if (delta < -180.0f) delta += 360.0f;
+
+    yaw_full += delta;
+    prev_raw  = raw_yaw;
+    yaw       = yaw_full;
 }
 
 
@@ -213,9 +281,39 @@ void IMU_Update_Attitude(MPU9250_Data_t *dat, float dt) {
     float mx = dat->mag_uT[y] - MAG_OFFSET_Y;
     float mz = -(dat->mag_uT[z] - MAG_OFFSET_Z);
 
-    // d. 将干净完美的 9 个参数一键送入黑盒！主函数再也不用看到这些脏活了！
+    // d. 9 轴融合 — 原始版本，保留
     MahonyAHRSupdate(gx_rad, gy_rad, gz_rad,
                      ax, ay, az,
-                     mx, my, mz, 
+                     mx, my, mz,
                      dt);
+}
+
+/* ========== Gyro 零偏 (全局，可跳过校准用默认值) ========== */
+float gyro_bias[3] = { 0.0f, 0.0f, 0.0f };  /* dps, 开机校准后更新 */
+
+void Gyro_Calibrate_Bias(uint16_t samples) {
+    float sx = 0, sy = 0, sz = 0;
+    for (uint16_t i = 0; i < samples; i++) {
+        MPU9250_Read_All_Axis_Plus_Pro(&mpu_data);
+        sx += mpu_data.gyro_dps[x];
+        sy += mpu_data.gyro_dps[y];
+        sz += mpu_data.gyro_dps[z];
+        delay_cycles(32000);  /* ~1ms */
+    }
+    gyro_bias[x] = sx / (float)samples;
+    gyro_bias[y] = sy / (float)samples;
+    gyro_bias[z] = sz / (float)samples;
+}
+
+/* 6 轴融合 wrapper：减去零偏 */
+void IMU_Update_Attitude_6Axis(MPU9250_Data_t *dat, float dt) {
+    float ax = dat->accel_g[x];
+    float ay = dat->accel_g[y];
+    float az = dat->accel_g[z];
+
+    float gx_rad = (dat->gyro_dps[x] - gyro_bias[x]) * DEG_TO_RAD;
+    float gy_rad = (dat->gyro_dps[y] - gyro_bias[y]) * DEG_TO_RAD;
+    float gz_rad = (dat->gyro_dps[z] - gyro_bias[z]) * DEG_TO_RAD;
+
+    MahonyAHRSupdateIMU(gx_rad, gy_rad, gz_rad, ax, ay, az, dt);
 }

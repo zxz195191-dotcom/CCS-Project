@@ -10,7 +10,7 @@
 
 // 编译期算好倒数，用乘法代替除法
 #define ACC_SCALE       (1.0f / 16384.0f)
-#define GYRO_SCALE      (1.0f / 131.0f)
+#define GYRO_SCALE      (1.0f / 16.4f)
 #define MAG_SCALE       0.15f
 #define DEG_TO_RAD      0.0174532925f // 角度转弧度 (PI / 180)
 

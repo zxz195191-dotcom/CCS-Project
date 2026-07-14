@@ -14,6 +14,9 @@ static uint8_t cmd_len = 0;
 /* ── 外部 PID 变量（定义在 MPU_Algorithm.c）── */
 extern volatile float g_Kp;
 extern volatile float g_Ki;
+extern float gyro_bias[3];
+extern void Gyro_Calibrate_Bias(uint16_t samples);
+extern volatile float g_target_speed;
 
 /* ── 前向声明 ── */
 static void cmd_push_char(char c);
@@ -145,12 +148,27 @@ static void cmd_execute(char *line)
     } else if (cmd_strcmp_nocase(cmd, "ki") == 0) {
         g_Ki = val;
         cmd_respond_float("Ki", g_Ki);
+    } else if (cmd_strcmp_nocase(cmd, "cal") == 0) {
+        cmd_reply("Calibrating gyro 5s, keep STILL!\r\n");
+        Gyro_Calibrate_Bias(5000);
+        char buf[64];
+        sprintf(buf, "Bias X=%.2f Y=%.2f Z=%.2f dps\r\n",
+                (double)gyro_bias[0], (double)gyro_bias[1], (double)gyro_bias[2]);
+        cmd_reply(buf);
+    } else if (cmd_strcmp_nocase(cmd, "bias") == 0) {
+        char buf[64];
+        sprintf(buf, "Bias X=%.2f Y=%.2f Z=%.2f dps\r\n",
+                (double)gyro_bias[0], (double)gyro_bias[1], (double)gyro_bias[2]);
+        cmd_reply(buf);
+    } else if (cmd_strcmp_nocase(cmd, "spd") == 0) {
+        g_target_speed = val;
+        cmd_respond_float("Speed", g_target_speed);
     } else if (cmd_strcmp_nocase(cmd, "reset") == 0) {
-        g_Kp = 3.5f;
-        g_Ki = 0.005f;
-        cmd_reply("PID reset to default: Kp=3.5  Ki=0.005\r\n");
+        g_Kp = 2.0f;
+        g_Ki = 0.0f;
+        cmd_reply("PID reset: Kp=2.0 Ki=0\r\n");
     } else {
-        cmd_reply("? [kp N] [ki N] [show] [reset]\r\n");
+        cmd_reply("? [kp N] [ki N] [spd N] [cal] [bias] [show] [reset]\r\n");
     }
 }
 
@@ -158,7 +176,7 @@ static void cmd_execute(char *line)
  *  CMD_Poll — 主循环调用，收字符 → 拼行 → 执行
  * ================================================================ */
 uint8_t Rx_flag = 0;
-void CMD_Poll(void)
+void CMD_RX(void)
 {
     /* 直接轮询 UART1 RX FIFO — 绕过中断，简单可靠 */
     while (!DL_UART_Main_isRXFIFOEmpty(TRACE_UART_INST)) {
