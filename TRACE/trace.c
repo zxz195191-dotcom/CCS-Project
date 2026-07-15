@@ -101,12 +101,13 @@ void trace_readByADC(){
 
 
 // 定义最大可能的 Error 值，用于丢线时极限救车
-#define MAX_TRACE_ERROR 60 
+#define MAX_TRACE_ERROR 80 
 /*
 加权平均（重心法）
 Error =  \frac{\sum (\text{传感器电压值} \times \text{对应权重})}{\sum \text{传感器电压值}}$$
 (分子是所有通道的加权和，分母是所有通道的电压总和)
 带阈值自适应
+滞回阈值
 */
 int32_t trace_get_error(Trace_OUT_t *t){
     int32_t numerator = 0;   // 分子（加权和）
@@ -117,27 +118,36 @@ int32_t trace_get_error(Trace_OUT_t *t){
     int32_t max_val = 0;
     int32_t min_val = 4095;
 
-    // int32_t raw_sum = 0;
-    // int32_t processed_val[TRACE_SENSOR_COUNT];
+    int32_t raw_sum = 0;
+    int32_t processed_val[TRACE_SENSOR_COUNT];
 
-    // //先判断黑白底
-    // for (uint8_t i = 0; i < TRACE_SENSOR_COUNT; i++) {
-    //     raw_sum += t[i].current_ADC;
-    // }
+    //先判断黑白底
+    for (uint8_t i = 0; i < TRACE_SENSOR_COUNT; i++) {
+        raw_sum += t[i].current_ADC;
+    }
 
-    // //如果半数以上的传感器都看到白色 那返回来的adc数值会大很多
-    // //4095最大 那么8通道 4095*8/2 = 16300
-    // bool is_white = (raw_sum > 16300);
+    //如果半数以上的传感器都看到白色 那返回来的adc数值会大很多
+    //4095最大 那么8通道 4095*8/2 = 16300
+    bool is_white = (raw_sum > 16300);
 
+    // 提取特征（反相）
     for(uint8_t i = 0; i < TRACE_SENSOR_COUNT ; i++){
+        if(is_white){//白底
+            //黑线扫描到的数值会比相对背景噪音小 需要“取反”来“提取特征”
+            processed_val[i] = 4095 - t[i].current_ADC;  
+        }else{
+            //黑底 直接可以用
+            processed_val[i] = t[i].current_ADC;
+        }
+
         if(t[i].current_ADC > max_val)  max_val = t[i].current_ADC ;
         if(t[i].current_ADC < min_val)  min_val = t[i].current_ADC ;
     }
 
 
     if((max_val - min_val) < 800){ //说明没有扫到线
-        denominator = 0;//这和走到轨迹线外一样
-    }else{//
+        denominator = 0;//若是丢线 则触发救车flag
+    }else{
         ///取极差0.333作为背景光噪音
         //min就是所有传感器中最小的adc数值 可以直接看作环境的背景底噪（黑色背景）
         //max则是最强反光（白色循迹线）
@@ -147,7 +157,7 @@ int32_t trace_get_error(Trace_OUT_t *t){
         
         for(uint8_t i = 0; i < TRACE_SENSOR_COUNT ; i++){
 
-            int32_t tem_val = t[i].current_ADC;
+            int32_t tem_val = processed_val[i];
 
             if(tem_val > noise_threshold){//大于底部噪音 那就是真的“特征”
                 tem_val -= noise_threshold;

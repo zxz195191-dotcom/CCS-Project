@@ -1,8 +1,6 @@
 #pragma once
 #include "headfile.h"
 
-
-
 #define AD0_H   DL_GPIO_setPins(TRACE_PORT, TRACE_AD0_PIN)
 #define AD0_L   DL_GPIO_clearPins(TRACE_PORT, TRACE_AD0_PIN)
 #define AD1_H   DL_GPIO_setPins(TRACE_PORT, TRACE_AD1_PIN)
