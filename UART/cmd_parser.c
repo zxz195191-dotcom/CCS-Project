@@ -12,12 +12,15 @@ static char cmd_line[32];
 static uint8_t cmd_len = 0;
 
 /* ── 外部 PID 变量（定义在 MPU_Algorithm.c）── */
-extern volatile float g_Kp;
-extern volatile float g_Ki;
+extern volatile float g_motor_Kp;
+extern volatile float g_motor_Ki;
+extern volatile float g_imu_Kp;
+extern volatile float g_imu_Ki;
 extern float gyro_bias[3];
 extern void Gyro_Calibrate_Bias(uint16_t samples);
 extern volatile float g_target_speed;
 extern volatile float g_K_steer;
+extern volatile float g_steer_Kd;
 
 /* ── 前向声明 ── */
 static void cmd_push_char(char c);
@@ -77,10 +80,7 @@ static int cmd_pop_char(void)
  * ================================================================ */
 static void cmd_reply(const char *str)
 {
-    while (*str) {
-        DL_UART_Main_transmitDataBlocking(TRACE_UART_INST, (uint8_t)*str);
-        str++;
-    }
+    uart_send_nb((const uint8_t *)str, (uint16_t)strlen(str));
 }
 
 static void cmd_respond_float(const char *label, float val)
@@ -116,7 +116,9 @@ static void cmd_execute(char *line)
     /* ── SHOW ── */
     if (cmd_strcmp_nocase(line, "show") == 0) {
         char buf[64];
-        sprintf(buf, "Kp=%.4f  Ki=%.4f\r\n", (double)g_Kp, (double)g_Ki);
+        sprintf(buf, "MotorKp=%.4f MotorKi=%.4f ImuKp=%.4f ImuKi=%.4f\r\n",
+                (double)g_motor_Kp, (double)g_motor_Ki,
+                (double)g_imu_Kp, (double)g_imu_Ki);
         cmd_reply(buf);
         return;
     }
@@ -144,11 +146,17 @@ static void cmd_execute(char *line)
     }
 
     if (cmd_strcmp_nocase(cmd, "kp") == 0) {
-        g_Kp = val;
-        cmd_respond_float("Kp", g_Kp);
+        g_motor_Kp = val;
+        cmd_respond_float("MotorKp", g_motor_Kp);
     } else if (cmd_strcmp_nocase(cmd, "ki") == 0) {
-        g_Ki = val;
-        cmd_respond_float("Ki", g_Ki);
+        g_motor_Ki = val;
+        cmd_respond_float("MotorKi", g_motor_Ki);
+    } else if (cmd_strcmp_nocase(cmd, "imukp") == 0) {
+        g_imu_Kp = val;
+        cmd_respond_float("ImuKp", g_imu_Kp);
+    } else if (cmd_strcmp_nocase(cmd, "imuki") == 0) {
+        g_imu_Ki = val;
+        cmd_respond_float("ImuKi", g_imu_Ki);
     } else if (cmd_strcmp_nocase(cmd, "cal") == 0) {
         cmd_reply("Calibrating gyro 5s, keep STILL!\r\n");
         Gyro_Calibrate_Bias(5000);
@@ -166,13 +174,28 @@ static void cmd_execute(char *line)
         cmd_respond_float("Speed", g_target_speed);
     } else if (cmd_strcmp_nocase(cmd, "steer") == 0) {
         g_K_steer = val;
-        cmd_respond_float("Steer", g_K_steer);
+        cmd_respond_float("SteerP", g_K_steer);
+    } else if (cmd_strcmp_nocase(cmd, "steerd") == 0) {
+        g_steer_Kd = val;
+        cmd_respond_float("SteerD", g_steer_Kd);
     } else if (cmd_strcmp_nocase(cmd, "reset") == 0) {
-        g_Kp = 2.0f;
-        g_Ki = 0.0f;
-        cmd_reply("PID reset: Kp=2.0 Ki=0\r\n");
-    } else {
-        cmd_reply("? [kp N] [ki N] [spd N] [steer N] [cal] [bias] [show] [reset]\r\n");
+        g_motor_Kp = 0.0005f;
+        g_motor_Ki = 0.08f;
+        cmd_reply("Motor PID reset: Kp=0.0005 Ki=0.08\r\n");
+    } else if(cmd_strcmp_nocase(cmd, "bg") == 0){
+        if(val == 0.0f ){
+            trace_set_bg(false);
+            cmd_reply("Black\r\n");
+            cmd_reply("Black\r\n");
+        }else if(val == 1.0f){
+            trace_set_bg(true);
+            cmd_reply("White\r\n");
+            cmd_reply("White\r\n");
+        }else{
+            cmd_reply("Wdf?\r\n");
+        }
+    }else{
+        cmd_reply("? [kp N] [ki N] [imukp N] [imuki N] [spd N] [steer N] [steerd N] [cal] [bias] [show] [reset]\r\n");
     }
 }
 
