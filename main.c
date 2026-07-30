@@ -28,6 +28,12 @@
 #define C_SEARCH_START_PULSES 650000U
 #define D_SEARCH_START_PULSES 1000000U
 #define A_SEARCH_START_PULSES 1450000U
+#define MODE2_LAUNCH_SPEED 1000.0f
+#define MODE2_ACCEL_RATE 50000.0f
+#define MODE2_DECEL_RATE 90000.0f
+#define MODE2_APPROACH_SPEED 12000.0f
+#define MODE2_DEFAULT_BRAKE_START_PULSES 350000U
+#define MODE2_DEFAULT_STOP_LEAD_PULSES 500U
 
 //345164 电机最快速速度
 
@@ -47,13 +53,28 @@ volatile uint8_t g_race_log_ready = 0U;
 volatile uint8_t g_race_logging_active = 0U;
 volatile uint8_t g_race_mode = RACE_MODE_1;
 
-static const RaceModeConfig race_mode_profiles[3] = {
+static RaceStopReason race_planned_stop_reason = RACE_STOP_NONE;
+static uint8_t mode2_plan_active = 0U;
+static uint8_t mode2_brake_logged = 0U;
+static uint32_t mode2_brake_start_pulses =
+    MODE2_DEFAULT_BRAKE_START_PULSES;
+static uint32_t mode2_stop_lead_pulses =
+    MODE2_DEFAULT_STOP_LEAD_PULSES;
+
+static RaceModeConfig race_mode_profiles[3] = {
     /* Mode 1: sealed 20 s lap / A-point precision-stop baseline. */
     {100000.0f, 0.0005f, 0.08f, 8.0f, 2.0f, 0.0f, 1603000U, 1U},
-    /* Modes 2 and 3 are reserved until their own calibration is complete. */
-    {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0U, 0U},
+    /* Mode 2: independent smooth A-to-B profile; values remain field-tunable. */
+    {80000.0f, 0.0005f, 0.08f, 8.0f, 2.0f, 0.0f, 426000U, 1U},
+    /* Mode 3 remains reserved until its own calibration is complete. */
     {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0U, 0U}
 };
+
+static RaceModeConfig *race_mode_profile(uint8_t mode)
+{
+    if (mode < RACE_MODE_1 || mode > RACE_MODE_3) return NULL;
+    return &race_mode_profiles[mode - RACE_MODE_1];
+}
 
 static const RaceModeConfig *race_mode_current_config(void)
 {
@@ -74,19 +95,30 @@ void Race_Mode_Apply(void)
     g_K_steer = config->steer_k;
     g_imu_Kp = config->imu_kp;
     g_imu_Ki = config->imu_ki;
-    if (g_race_mode == RACE_MODE_1) {
-        trace_set_bg(true);
-    }
+    trace_set_bg(true);
 }
 
 void Race_Mode_Start(void)
 {
+    if (g_race_logging_active || !Race_Mode_IsConfigured(g_race_mode)) return;
+
     Race_Mode_Apply();
-    g_target_speed = race_mode_current_config()->run_speed;
+    race_planned_stop_reason = RACE_STOP_NONE;
+    mode2_brake_logged = 0U;
+
+    if (g_race_mode == RACE_MODE_2) {
+        mode2_plan_active = 1U;
+        g_target_speed = MODE2_LAUNCH_SPEED;
+    } else {
+        mode2_plan_active = 0U;
+        g_target_speed = race_mode_current_config()->run_speed;
+    }
 }
 
 void Race_Mode_Stop(void)
 {
+    mode2_plan_active = 0U;
+    race_planned_stop_reason = RACE_STOP_NONE;
     g_target_speed = 0.0f;
 }
 
@@ -103,6 +135,141 @@ uint32_t Race_Mode_GetStopPulses(void)
 uint8_t Race_Mode_ParametersLocked(void)
 {
     return (g_race_mode == RACE_MODE_1) ? 1U : 0U;
+}
+
+uint8_t Race_Mode_IsConfigured(uint8_t mode)
+{
+    RaceModeConfig *config = race_mode_profile(mode);
+    return (config != NULL && config->configured) ? 1U : 0U;
+}
+
+uint8_t Race_Mode_Select(uint8_t mode)
+{
+    if (!Race_Mode_IsConfigured(mode) || g_race_logging_active ||
+        g_target_speed > 1.0f) {
+        return 0U;
+    }
+
+    g_race_mode = mode;
+    mode2_plan_active = 0U;
+    race_planned_stop_reason = RACE_STOP_NONE;
+    g_target_speed = 0.0f;
+    Race_Mode_Apply();
+    return 1U;
+}
+
+static RaceModeConfig *race_mode_editable_config(void)
+{
+    RaceModeConfig *config = race_mode_profile(g_race_mode);
+    if (Race_Mode_ParametersLocked() || config == NULL || !config->configured) {
+        return NULL;
+    }
+    return config;
+}
+
+uint8_t Race_Mode_SetRunSpeed(float value)
+{
+    RaceModeConfig *config = race_mode_editable_config();
+    if (config == NULL) return 0U;
+    if (value < 1000.0f) value = 1000.0f;
+    if (value > 200000.0f) value = 200000.0f;
+    config->run_speed = value;
+    return 1U;
+}
+
+uint8_t Race_Mode_SetMotorKp(float value)
+{
+    RaceModeConfig *config = race_mode_editable_config();
+    if (config == NULL) return 0U;
+    config->motor_kp = value;
+    Race_Mode_Apply();
+    return 1U;
+}
+
+uint8_t Race_Mode_SetMotorKi(float value)
+{
+    RaceModeConfig *config = race_mode_editable_config();
+    if (config == NULL) return 0U;
+    config->motor_ki = value;
+    Race_Mode_Apply();
+    return 1U;
+}
+
+uint8_t Race_Mode_SetSteerK(float value)
+{
+    RaceModeConfig *config = race_mode_editable_config();
+    if (config == NULL) return 0U;
+    config->steer_k = value;
+    Race_Mode_Apply();
+    return 1U;
+}
+
+uint8_t Race_Mode_SetImuKp(float value)
+{
+    RaceModeConfig *config = race_mode_editable_config();
+    if (config == NULL) return 0U;
+    config->imu_kp = value;
+    Race_Mode_Apply();
+    return 1U;
+}
+
+uint8_t Race_Mode_SetImuKi(float value)
+{
+    RaceModeConfig *config = race_mode_editable_config();
+    if (config == NULL) return 0U;
+    config->imu_ki = value;
+    Race_Mode_Apply();
+    return 1U;
+}
+
+uint8_t Race_Mode_SetStopPulses(uint32_t value)
+{
+    RaceModeConfig *config = race_mode_editable_config();
+    if (config == NULL || g_race_logging_active) return 0U;
+    if (value < 10000U) value = 10000U;
+    if (value > 3000000U) value = 3000000U;
+    config->stop_pulses = value;
+    if (g_race_mode == RACE_MODE_2) {
+        if (mode2_brake_start_pulses >= value) {
+            mode2_brake_start_pulses = value - 1000U;
+        }
+        if (mode2_stop_lead_pulses >= value) {
+            mode2_stop_lead_pulses = value / 10U;
+        }
+    }
+    return 1U;
+}
+
+uint32_t Race_Mode_GetBrakeStartPulses(void)
+{
+    return (g_race_mode == RACE_MODE_2) ? mode2_brake_start_pulses : 0U;
+}
+
+uint32_t Race_Mode_GetStopLeadPulses(void)
+{
+    return (g_race_mode == RACE_MODE_2) ? mode2_stop_lead_pulses : 0U;
+}
+
+uint8_t Race_Mode_SetBrakeStartPulses(uint32_t value)
+{
+    uint32_t target = Race_Mode_GetStopPulses();
+    if (g_race_mode != RACE_MODE_2 || Race_Mode_ParametersLocked() ||
+        g_race_logging_active) return 0U;
+    if (value < 10000U) value = 10000U;
+    if (value >= target) value = target - 1000U;
+    mode2_brake_start_pulses = value;
+    return 1U;
+}
+
+uint8_t Race_Mode_SetStopLeadPulses(uint32_t value)
+{
+    uint32_t target = Race_Mode_GetStopPulses();
+    if (g_race_mode != RACE_MODE_2 || Race_Mode_ParametersLocked() ||
+        g_race_logging_active) return 0U;
+    if (value > 20000U) value = 20000U;
+    if (value >= target) value = target / 10U;
+    mode2_stop_lead_pulses = value;
+    return 1U;
 }
 
 static uint32_t lap_start_us = 0U;
@@ -136,6 +303,53 @@ static uint32_t race_current_pulses(void)
     return lap_pulse_sum / 2U;
 }
 
+static void race_mode_update_speed_plan(float dt)
+{
+    if (g_race_mode != RACE_MODE_2 || !mode2_plan_active) return;
+
+    const RaceModeConfig *config = race_mode_current_config();
+    uint32_t pulse = g_race_logging_active ? race_current_pulses() : 0U;
+    uint32_t target_pulse = config->stop_pulses;
+    uint32_t command_pulse = (target_pulse > mode2_stop_lead_pulses) ?
+        (target_pulse - mode2_stop_lead_pulses) : target_pulse;
+    uint32_t brake_pulse = mode2_brake_start_pulses;
+    float approach_speed = MODE2_APPROACH_SPEED;
+    float desired_speed = config->run_speed;
+
+    if (brake_pulse >= command_pulse) {
+        brake_pulse = (command_pulse > 1000U) ? command_pulse - 1000U : 0U;
+    }
+    if (approach_speed >= config->run_speed) {
+        approach_speed = config->run_speed * 0.5f;
+    }
+
+    if (pulse >= command_pulse && g_race_logging_active) {
+        mode2_plan_active = 0U;
+        race_planned_stop_reason = RACE_STOP_TARGET_PULSE;
+        g_target_speed = 0.0f;
+        return;
+    }
+
+    if (pulse >= brake_pulse && command_pulse > brake_pulse) {
+        uint32_t remaining = command_pulse - pulse;
+        uint32_t span = command_pulse - brake_pulse;
+        float ratio = (float)remaining / (float)span;
+        desired_speed = approach_speed +
+            (config->run_speed - approach_speed) * ratio;
+
+        if (!mode2_brake_logged && g_race_logging_active) {
+            mode2_brake_logged = 1U;
+            g_race_log.brake_start_pulse = pulse;
+        }
+    }
+
+    float delta = desired_speed - g_target_speed;
+    float limit = ((delta >= 0.0f) ? MODE2_ACCEL_RATE : MODE2_DECEL_RATE) * dt;
+    if (delta > limit) delta = limit;
+    if (delta < -limit) delta = -limit;
+    g_target_speed += delta;
+}
+
 static float race_absf(float value)
 {
     return (value < 0.0f) ? -value : value;
@@ -152,6 +366,8 @@ static void race_log_start(uint32_t now_us)
     race_run_counter++;
     g_race_log = (RaceRunLog){0};
     g_race_log.run_number = race_run_counter;
+    g_race_log.target_stop_pulse = Race_Mode_GetStopPulses();
+    g_race_log.race_mode = g_race_mode;
     g_race_log.phase = RACE_PHASE_AB;
     g_race_log_ready = 0U;
     g_race_logging_active = 1U;
@@ -435,7 +651,10 @@ static void lap_record_update(uint32_t now_us, int32_t dL, int32_t dR)
         lap_pulse_sum += left + right;
 
         if (g_lap_recording && !run_requested) {
-            race_request_stop(now_us, RACE_STOP_MANUAL);
+            RaceStopReason reason = (race_planned_stop_reason != RACE_STOP_NONE) ?
+                race_planned_stop_reason : RACE_STOP_MANUAL;
+            race_planned_stop_reason = RACE_STOP_NONE;
+            race_request_stop(now_us, reason);
         }
 
         if (race_stop_pending) {
@@ -531,6 +750,8 @@ int main(void)
             trace_readByADC();
             int32_t trace_err = trace_get_error(sensors);
 
+            race_mode_update_speed_plan(dt);
+
             if (ADC_OK()) {
                 control_err = trace_err;
                 current_base_speed = g_target_speed;
@@ -552,18 +773,18 @@ int main(void)
             if (imu_ok) {
                 race_log_navigation(mpu_data.gyro_dps[z] - gyro_bias[z], dt);
             }
-            if (g_race_logging_active) {
+            if (g_race_logging_active && g_race_mode == RACE_MODE_1) {
                 race_log_finish_mask(trace_get_active_mask());
             }
 
-            if (g_lap_recording &&
+            if (g_race_mode == RACE_MODE_1 && g_lap_recording &&
                 race_finish_line_confirmed(trace_get_active_mask())) {
                 Race_Mode_Stop();
                 current_base_speed = 0.0f;
                 race_request_stop(now_us, RACE_STOP_FINISH_LINE);
             }
 
-            if (g_lap_recording &&
+            if (g_race_mode == RACE_MODE_1 && g_lap_recording &&
                 (race_current_pulses() >= Race_Mode_GetStopPulses())) {
                 Race_Mode_Stop();
                 current_base_speed = 0.0f;

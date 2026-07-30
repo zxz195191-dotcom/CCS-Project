@@ -116,8 +116,14 @@ static void cmd_execute(char *line)
     /* ── SHOW ── */
     if (cmd_strcmp_nocase(line, "show") == 0) {
         char buf[96];
-        sprintf(buf, "Mode=%u MotorKp=%.4f MotorKi=%.4f Steer=%.2f ImuKp=%.4f ImuKi=%.4f\r\n",
+        sprintf(buf, "Mode=%u RunSpeed=%.0f Target=%lu Brake=%lu Lead=%lu\r\n",
                 (unsigned int)g_race_mode,
+                (double)Race_Mode_GetRunSpeed(),
+                (unsigned long)Race_Mode_GetStopPulses(),
+                (unsigned long)Race_Mode_GetBrakeStartPulses(),
+                (unsigned long)Race_Mode_GetStopLeadPulses());
+        cmd_reply(buf);
+        sprintf(buf, "MotorKp=%.4f MotorKi=%.4f Steer=%.2f ImuKp=%.4f ImuKi=%.4f\r\n",
                 (double)g_motor_Kp, (double)g_motor_Ki,
                 (double)g_K_steer,
                 (double)g_imu_Kp, (double)g_imu_Ki);
@@ -150,25 +156,25 @@ static void cmd_execute(char *line)
     if (cmd_strcmp_nocase(cmd, "kp") == 0) {
         if (Race_Mode_ParametersLocked()) cmd_reply("MODE1 LOCKED\r\n");
         else {
-            g_motor_Kp = val;
+            (void)Race_Mode_SetMotorKp(val);
             cmd_respond_float("MotorKp", g_motor_Kp);
         }
     } else if (cmd_strcmp_nocase(cmd, "ki") == 0) {
         if (Race_Mode_ParametersLocked()) cmd_reply("MODE1 LOCKED\r\n");
         else {
-            g_motor_Ki = val;
+            (void)Race_Mode_SetMotorKi(val);
             cmd_respond_float("MotorKi", g_motor_Ki);
         }
     } else if (cmd_strcmp_nocase(cmd, "imukp") == 0) {
         if (Race_Mode_ParametersLocked()) cmd_reply("MODE1 LOCKED\r\n");
         else {
-            g_imu_Kp = val;
+            (void)Race_Mode_SetImuKp(val);
             cmd_respond_float("ImuKp", g_imu_Kp);
         }
     } else if (cmd_strcmp_nocase(cmd, "imuki") == 0) {
         if (Race_Mode_ParametersLocked()) cmd_reply("MODE1 LOCKED\r\n");
         else {
-            g_imu_Ki = val;
+            (void)Race_Mode_SetImuKi(val);
             cmd_respond_float("ImuKi", g_imu_Ki);
         }
     } else if (cmd_strcmp_nocase(cmd, "cal") == 0) {
@@ -184,18 +190,49 @@ static void cmd_execute(char *line)
                 (double)gyro_bias[0], (double)gyro_bias[1], (double)gyro_bias[2]);
         cmd_reply(buf);
     } else if (cmd_strcmp_nocase(cmd, "spd") == 0) {
-        if (Race_Mode_ParametersLocked()) {
-            if (val > 1.0f) Race_Mode_Start();
-            else Race_Mode_Stop();
+        if (val > 1.0f) {
+            if (!Race_Mode_ParametersLocked()) {
+                (void)Race_Mode_SetRunSpeed(val);
+            }
+            Race_Mode_Start();
         } else {
-            g_target_speed = val;
+            Race_Mode_Stop();
         }
-        cmd_respond_float("Speed", g_target_speed);
+        cmd_respond_float("RunSpeed", Race_Mode_GetRunSpeed());
     } else if (cmd_strcmp_nocase(cmd, "steer") == 0) {
         if (Race_Mode_ParametersLocked()) cmd_reply("MODE1 LOCKED\r\n");
         else {
-            g_K_steer = val;
+            (void)Race_Mode_SetSteerK(val);
             cmd_respond_float("SteerP", g_K_steer);
+        }
+    } else if (cmd_strcmp_nocase(cmd, "mode") == 0) {
+        uint8_t mode = (uint8_t)val;
+        if (Race_Mode_Select(mode)) {
+            char buf[32];
+            sprintf(buf, "MODE %u READY\r\n", (unsigned int)g_race_mode);
+            cmd_reply(buf);
+        } else if (!Race_Mode_IsConfigured(mode)) {
+            cmd_reply("MODE NOT CONFIGURED\r\n");
+        } else {
+            cmd_reply("STOP BEFORE MODE CHANGE\r\n");
+        }
+    } else if (cmd_strcmp_nocase(cmd, "target") == 0) {
+        if (g_race_mode != RACE_MODE_2) cmd_reply("MODE2 ONLY\r\n");
+        else {
+            (void)Race_Mode_SetStopPulses((uint32_t)val);
+            cmd_respond_float("TargetPulse", (float)Race_Mode_GetStopPulses());
+        }
+    } else if (cmd_strcmp_nocase(cmd, "brake") == 0) {
+        if (g_race_mode != RACE_MODE_2) cmd_reply("MODE2 ONLY\r\n");
+        else {
+            (void)Race_Mode_SetBrakeStartPulses((uint32_t)val);
+            cmd_respond_float("BrakePulse", (float)Race_Mode_GetBrakeStartPulses());
+        }
+    } else if (cmd_strcmp_nocase(cmd, "lead") == 0) {
+        if (g_race_mode != RACE_MODE_2) cmd_reply("MODE2 ONLY\r\n");
+        else {
+            (void)Race_Mode_SetStopLeadPulses((uint32_t)val);
+            cmd_respond_float("StopLead", (float)Race_Mode_GetStopLeadPulses());
         }
     } else if (cmd_strcmp_nocase(cmd, "reset") == 0) {
         Race_Mode_Apply();
@@ -215,7 +252,7 @@ static void cmd_execute(char *line)
             cmd_reply("Wdf?\r\n");
         }
     }else{
-        cmd_reply("? [kp N] [ki N] [imukp N] [imuki N] [spd N] [steer N] [cal] [bias] [show] [reset]\r\n");
+        cmd_reply("? [mode N] [spd N] [target N] [brake N] [lead N] [kp N] [ki N] [steer N] [show]\r\n");
     }
 }
 

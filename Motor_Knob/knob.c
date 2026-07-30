@@ -21,7 +21,8 @@ static uint8_t led_on = 1;
 static uint32_t buzzer_freq = 0;
 
 typedef enum {
-    UI_PAGE_MOTOR = 0,
+    UI_PAGE_MODE = 0,
+    UI_PAGE_MOTOR,
     UI_PAGE_TRACE,
     UI_PAGE_GYRO,
     UI_PAGE_IO,
@@ -38,7 +39,7 @@ typedef enum {
     UI_EDIT
 } UiState;
 
-static UiPage  ui_page = UI_PAGE_MOTOR;
+static UiPage  ui_page = UI_PAGE_MODE;
 static UiState ui_state = UI_PAGE_SELECT;
 static int8_t  ui_param = 0;
 static uint8_t ui_dirty = 1;
@@ -48,6 +49,7 @@ static UiPage ui_drawn_page = UI_PAGE_COUNT;
 static uint8_t ui_param_count(UiPage page)
 {
     switch (page) {
+    case UI_PAGE_MODE:  return 4U;
     case UI_PAGE_MOTOR: return 4U;
     case UI_PAGE_TRACE: return 2U;
     case UI_PAGE_GYRO:  return 2U;
@@ -106,6 +108,24 @@ static void ui_adjust_frequency(int8_t delta)
     Buzzer_SetTone(buzzer_freq);
 }
 
+static void ui_select_mode(int8_t delta)
+{
+    int8_t direction = (delta < 0) ? -1 : 1;
+    uint8_t attempts = 0U;
+    uint8_t next = g_race_mode;
+
+    while (attempts++ < 3U) {
+        int8_t candidate = (int8_t)next + direction;
+        if (candidate < (int8_t)RACE_MODE_1) candidate = (int8_t)RACE_MODE_3;
+        if (candidate > (int8_t)RACE_MODE_3) candidate = (int8_t)RACE_MODE_1;
+        next = (uint8_t)candidate;
+        if (Race_Mode_IsConfigured(next)) {
+            (void)Race_Mode_Select(next);
+            return;
+        }
+    }
+}
+
 static void ui_adjust_value(int8_t delta)
 {
     if (Race_Mode_ParametersLocked() &&
@@ -114,27 +134,50 @@ static void ui_adjust_value(int8_t delta)
     }
 
     switch (ui_page) {
+    case UI_PAGE_MODE:
+        if (ui_param == 0) {
+            ui_select_mode(delta);
+        } else if (g_race_mode == RACE_MODE_2 && ui_param == 1) {
+            int32_t next = (int32_t)Race_Mode_GetStopPulses() +
+                (int32_t)delta * 1000;
+            if (next < 10000) next = 10000;
+            (void)Race_Mode_SetStopPulses((uint32_t)next);
+        } else if (g_race_mode == RACE_MODE_2 && ui_param == 2) {
+            int32_t next = (int32_t)Race_Mode_GetBrakeStartPulses() +
+                (int32_t)delta * 1000;
+            if (next < 10000) next = 10000;
+            (void)Race_Mode_SetBrakeStartPulses((uint32_t)next);
+        } else if (g_race_mode == RACE_MODE_2 && ui_param == 3) {
+            int32_t next = (int32_t)Race_Mode_GetStopLeadPulses() +
+                (int32_t)delta * 100;
+            if (next < 0) next = 0;
+            (void)Race_Mode_SetStopLeadPulses((uint32_t)next);
+        }
+        break;
+
     case UI_PAGE_MOTOR:
         if (ui_param == 0) {
-            g_target_speed += (float)delta * 4000.0f;
-            if (g_target_speed < 0.0f) g_target_speed = 0.0f;
-            if (g_target_speed > 200000.0f) g_target_speed = 200000.0f;
+            float next = Race_Mode_GetRunSpeed() + (float)delta * 4000.0f;
+            (void)Race_Mode_SetRunSpeed(next);
         } else if (ui_param == 1) {
-            g_motor_Kp += (float)delta * 0.0001f;
-            if (g_motor_Kp < 0.0f) g_motor_Kp = 0.0f;
-            if (g_motor_Kp > 5.0f) g_motor_Kp = 5.0f;
+            float next = g_motor_Kp + (float)delta * 0.0001f;
+            if (next < 0.0f) next = 0.0f;
+            if (next > 5.0f) next = 5.0f;
+            (void)Race_Mode_SetMotorKp(next);
         } else if (ui_param == 2) {
-            g_motor_Ki += (float)delta * 0.005f;
-            if (g_motor_Ki < 0.0f) g_motor_Ki = 0.0f;
-            if (g_motor_Ki > 10.0f) g_motor_Ki = 10.0f;
+            float next = g_motor_Ki + (float)delta * 0.005f;
+            if (next < 0.0f) next = 0.0f;
+            if (next > 10.0f) next = 10.0f;
+            (void)Race_Mode_SetMotorKi(next);
         }
         break;
 
     case UI_PAGE_TRACE:
         if (ui_param == 1) {
-            g_K_steer += (float)delta * 0.5f;
-            if (g_K_steer < 0.0f) g_K_steer = 0.0f;
-            if (g_K_steer > 100.0f) g_K_steer = 100.0f;
+            float next = g_K_steer + (float)delta * 0.5f;
+            if (next < 0.0f) next = 0.0f;
+            if (next > 100.0f) next = 100.0f;
+            (void)Race_Mode_SetSteerK(next);
         }
         break;
 
@@ -196,6 +239,8 @@ static void ui_process(int8_t enc, uint8_t button)
             LED_Set(led_on != 0U);
         } else if (!(ui_page == UI_PAGE_TRACE && ui_param == 0) &&
                    !(ui_page == UI_PAGE_GYRO && ui_param == 0) &&
+                   !(ui_page == UI_PAGE_MODE && ui_param > 0 &&
+                     g_race_mode != RACE_MODE_2) &&
                    !(ui_page == UI_PAGE_RAW) &&
                    !(ui_page == UI_PAGE_RUN_LOG) &&
                    !(ui_page == UI_PAGE_MASK_LOG_1) &&
@@ -308,6 +353,42 @@ void Knob_UI_Show(void)
     else state_name = "EDIT";
 
     switch (ui_page) {
+    case UI_PAGE_MODE:
+        sprintf(line, "MODE %s", state_name);
+        ui_plain_line(0, line);
+        selected = (ui_state != UI_PAGE_SELECT && ui_param == 0);
+        sprintf(line, "MODE:M%u %s", (unsigned int)g_race_mode,
+                Race_Mode_ParametersLocked() ? "SEALED" : "READY");
+        ui_line(1, selected, line);
+        selected = (ui_state != UI_PAGE_SELECT && ui_param == 1);
+        if (g_race_mode == RACE_MODE_2) {
+            sprintf(line, "B:%7lu",
+                    (unsigned long)Race_Mode_GetStopPulses());
+        } else {
+            sprintf(line, "B:      -");
+        }
+        ui_line(2, selected, line);
+        selected = (ui_state != UI_PAGE_SELECT && ui_param == 2);
+        if (g_race_mode == RACE_MODE_2) {
+            sprintf(line, "BRK:%7lu",
+                    (unsigned long)Race_Mode_GetBrakeStartPulses());
+        } else {
+            sprintf(line, "BRK:    -");
+        }
+        ui_line(3, selected, line);
+        selected = (ui_state != UI_PAGE_SELECT && ui_param == 3);
+        if (g_race_mode == RACE_MODE_2) {
+            sprintf(line, "LEAD:%5lu",
+                    (unsigned long)Race_Mode_GetStopLeadPulses());
+        } else {
+            sprintf(line, "LEAD:   -");
+        }
+        ui_line(4, selected, line);
+        sprintf(line, "SPD:%6.0f", (double)Race_Mode_GetRunSpeed());
+        ui_plain_line(5, line);
+        ui_plain_line(6, "M3:RESERVED");
+        break;
+
     case UI_PAGE_MOTOR:
         if (Race_Mode_ParametersLocked()) {
             sprintf(line, "M%u MOTOR LOCK", (unsigned int)g_race_mode);
@@ -317,9 +398,7 @@ void Knob_UI_Show(void)
         }
         ui_plain_line(0, line);
         selected = (ui_state != UI_PAGE_SELECT && ui_param == 0);
-        sprintf(line, "SPD:%6.0f",
-                (double)(Race_Mode_ParametersLocked() ?
-                    Race_Mode_GetRunSpeed() : g_target_speed));
+        sprintf(line, "SPD:%6.0f", (double)Race_Mode_GetRunSpeed());
         ui_line(1, selected, line);
         selected = (ui_state != UI_PAGE_SELECT && ui_param == 1);
         sprintf(line, "KP:%+.4f", (double)g_motor_Kp);
@@ -391,6 +470,36 @@ void Knob_UI_Show(void)
         if (g_race_log.stop_reason == RACE_STOP_CALIBRATION_PULSE) reason = 'P';
         else if (g_race_log.stop_reason == RACE_STOP_MANUAL) reason = 'M';
         else if (g_race_log.stop_reason == RACE_STOP_FINISH_LINE) reason = 'L';
+        else if (g_race_log.stop_reason == RACE_STOP_TARGET_PULSE) reason = 'B';
+
+        if (g_race_log.race_mode == RACE_MODE_2) {
+            int32_t stop_error = (int32_t)g_race_log.final_stop_pulse -
+                (int32_t)g_race_log.target_stop_pulse;
+            sprintf(line, "M2 LOG R%02lu %c",
+                    (unsigned long)g_race_log.run_number, reason);
+            ui_plain_line(0, line);
+            sprintf(line, "BRK:%7lu",
+                    (unsigned long)g_race_log.brake_start_pulse);
+            ui_plain_line(1, line);
+            sprintf(line, "BDET:%6lu", (unsigned long)g_race_log.pulse_b);
+            ui_plain_line(2, line);
+            sprintf(line, "CMD:%7lu",
+                    (unsigned long)g_race_log.stop_command_pulse);
+            ui_plain_line(3, line);
+            sprintf(line, "STP:%7lu",
+                    (unsigned long)g_race_log.final_stop_pulse);
+            ui_plain_line(4, line);
+            sprintf(line, "ERR:%+7ld", (long)stop_error);
+            ui_plain_line(5, line);
+            sprintf(line, "T:%4lu/%4lu",
+                    (unsigned long)g_race_log.stop_command_time_ms,
+                    (unsigned long)g_race_log.final_stop_time_ms);
+            ui_plain_line(6, line);
+            sprintf(line, "G:%3u TARGET:B",
+                    (unsigned int)(g_race_log.max_abs_gyro_dps_x10 / 10U));
+            ui_plain_line(7, line);
+            break;
+        }
 
         sprintf(line, "LOG R%02lu S%u N%u",
                 (unsigned long)g_race_log.run_number,

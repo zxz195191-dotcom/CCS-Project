@@ -8,7 +8,8 @@ typedef enum {
     RACE_STOP_NONE = 0,
     RACE_STOP_CALIBRATION_PULSE,
     RACE_STOP_MANUAL,
-    RACE_STOP_FINISH_LINE
+    RACE_STOP_FINISH_LINE,
+    RACE_STOP_TARGET_PULSE
 } RaceStopReason;
 
 typedef enum {
@@ -26,6 +27,8 @@ typedef struct {
 
 typedef struct {
     uint32_t run_number;
+    uint32_t target_stop_pulse;
+    uint32_t brake_start_pulse;
     uint32_t pulse_b;
     uint32_t pulse_c;
     uint32_t pulse_d;
@@ -39,6 +42,7 @@ typedef struct {
     int16_t final_relative_yaw_x10;
     uint8_t first_finish_candidate_mask;
     uint8_t stop_reason;
+    uint8_t race_mode;
     uint8_t phase;
     uint8_t finish_event_count;
     uint8_t finish_event_overflow;
