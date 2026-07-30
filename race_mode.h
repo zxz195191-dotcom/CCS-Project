@@ -25,6 +25,7 @@ void Race_Mode_Apply(void);
 void Race_Mode_Start(void);
 void Race_Mode_Stop(void);
 float Race_Mode_GetRunSpeed(void);
+float Race_Mode_GetCurveSpeed(void);
 uint32_t Race_Mode_GetStopPulses(void);
 uint8_t Race_Mode_ParametersLocked(void);
 uint8_t Race_Mode_IsConfigured(uint8_t mode);

@@ -116,9 +116,10 @@ static void cmd_execute(char *line)
     /* ── SHOW ── */
     if (cmd_strcmp_nocase(line, "show") == 0) {
         char buf[96];
-        sprintf(buf, "Mode=%u RunSpeed=%.0f Target=%lu Brake=%lu Lead=%lu\r\n",
+        sprintf(buf, "Mode=%u Run=%.0f Curve=%.0f Target=%lu Brake=%lu Lead=%lu\r\n",
                 (unsigned int)g_race_mode,
                 (double)Race_Mode_GetRunSpeed(),
+                (double)Race_Mode_GetCurveSpeed(),
                 (unsigned long)Race_Mode_GetStopPulses(),
                 (unsigned long)Race_Mode_GetBrakeStartPulses(),
                 (unsigned long)Race_Mode_GetStopLeadPulses());

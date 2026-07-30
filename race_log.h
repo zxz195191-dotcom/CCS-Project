@@ -9,7 +9,8 @@ typedef enum {
     RACE_STOP_CALIBRATION_PULSE,
     RACE_STOP_MANUAL,
     RACE_STOP_FINISH_LINE,
-    RACE_STOP_TARGET_PULSE
+    RACE_STOP_TARGET_PULSE,
+    RACE_STOP_POST_A
 } RaceStopReason;
 
 typedef enum {

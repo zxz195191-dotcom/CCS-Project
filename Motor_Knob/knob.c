@@ -364,6 +364,9 @@ void Knob_UI_Show(void)
         if (g_race_mode == RACE_MODE_2) {
             sprintf(line, "B:%7lu",
                     (unsigned long)Race_Mode_GetStopPulses());
+        } else if (g_race_mode == RACE_MODE_3) {
+            sprintf(line, "CURV:%6.0f",
+                    (double)Race_Mode_GetCurveSpeed());
         } else {
             sprintf(line, "B:      -");
         }
@@ -372,6 +375,8 @@ void Knob_UI_Show(void)
         if (g_race_mode == RACE_MODE_2) {
             sprintf(line, "BRK:%7lu",
                     (unsigned long)Race_Mode_GetBrakeStartPulses());
+        } else if (g_race_mode == RACE_MODE_3) {
+            sprintf(line, "A:PASS FIRST");
         } else {
             sprintf(line, "BRK:    -");
         }
@@ -380,13 +385,15 @@ void Knob_UI_Show(void)
         if (g_race_mode == RACE_MODE_2) {
             sprintf(line, "LEAD:%5lu",
                     (unsigned long)Race_Mode_GetStopLeadPulses());
+        } else if (g_race_mode == RACE_MODE_3) {
+            sprintf(line, "STOP:A+140K");
         } else {
             sprintf(line, "LEAD:   -");
         }
         ui_line(4, selected, line);
         sprintf(line, "SPD:%6.0f", (double)Race_Mode_GetRunSpeed());
         ui_plain_line(5, line);
-        ui_plain_line(6, "M3:RESERVED");
+        ui_plain_line(6, "M1 M2 M3 READY");
         break;
 
     case UI_PAGE_MOTOR:
@@ -471,6 +478,7 @@ void Knob_UI_Show(void)
         else if (g_race_log.stop_reason == RACE_STOP_MANUAL) reason = 'M';
         else if (g_race_log.stop_reason == RACE_STOP_FINISH_LINE) reason = 'L';
         else if (g_race_log.stop_reason == RACE_STOP_TARGET_PULSE) reason = 'B';
+        else if (g_race_log.stop_reason == RACE_STOP_POST_A) reason = 'A';
 
         if (g_race_log.race_mode == RACE_MODE_2) {
             int32_t stop_error = (int32_t)g_race_log.final_stop_pulse -
@@ -497,6 +505,35 @@ void Knob_UI_Show(void)
             ui_plain_line(6, line);
             sprintf(line, "G:%3u TARGET:B",
                     (unsigned int)(g_race_log.max_abs_gyro_dps_x10 / 10U));
+            ui_plain_line(7, line);
+            break;
+        }
+
+        if (g_race_log.race_mode == RACE_MODE_3) {
+            sprintf(line, "M3 LOG R%02lu %c",
+                    (unsigned long)g_race_log.run_number, reason);
+            ui_plain_line(0, line);
+            sprintf(line, "B:%7lu", (unsigned long)g_race_log.pulse_b);
+            ui_plain_line(1, line);
+            sprintf(line, "D:%7lu", (unsigned long)g_race_log.pulse_d);
+            ui_plain_line(2, line);
+            sprintf(line, "A:%7lu %02X",
+                    (unsigned long)g_race_log.first_finish_candidate_pulse,
+                    (unsigned int)g_race_log.first_finish_candidate_mask);
+            ui_plain_line(3, line);
+            sprintf(line, "BRK:%7lu",
+                    (unsigned long)g_race_log.brake_start_pulse);
+            ui_plain_line(4, line);
+            sprintf(line, "CMD:%7lu",
+                    (unsigned long)g_race_log.stop_command_pulse);
+            ui_plain_line(5, line);
+            sprintf(line, "STP:%7lu",
+                    (unsigned long)g_race_log.final_stop_pulse);
+            ui_plain_line(6, line);
+            sprintf(line, "T:%5lu G:%3u%c",
+                    (unsigned long)g_race_log.stop_command_time_ms,
+                    (unsigned int)(g_race_log.max_abs_gyro_dps_x10 / 10U),
+                    reason);
             ui_plain_line(7, line);
             break;
         }
