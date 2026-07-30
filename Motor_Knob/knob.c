@@ -11,6 +11,12 @@ extern volatile float g_target_speed;
 extern volatile float g_K_steer;
 extern int32_t control_err;
 extern float current_base_speed;
+extern volatile uint32_t g_lap_time_ms;
+extern volatile uint32_t g_lap_pulses;
+extern volatile uint8_t g_finish_armed_seen;
+extern volatile uint8_t g_finish_max_count;
+extern volatile uint8_t g_finish_best_mask;
+extern volatile uint8_t g_finish_last_candidate_mask;
 
 static int32_t enc_cnt = 0;
 static uint8_t last_button = 0;
@@ -54,6 +60,11 @@ static uint8_t ui_param_count(UiPage page)
 static void ui_mark_dirty(void)
 {
     ui_dirty = 1U;
+}
+
+void Knob_UI_Refresh(void)
+{
+    ui_mark_dirty();
 }
 
 static void ui_wrap_param(int8_t delta)
@@ -288,6 +299,16 @@ void Knob_UI_Show(void)
         selected = (ui_state != UI_PAGE_SELECT && ui_param == 3);
         ui_line(4, selected,
                 (g_target_speed > 1.0f) ? "RUN:STOP" : "RUN:START");
+        sprintf(line, "T:%4.1f P:%7lu",
+                (double)g_lap_time_ms / 1000.0,
+                (unsigned long)g_lap_pulses);
+        ui_plain_line(5, line);
+        sprintf(line, "A%u C%u B%02X L%02X",
+                (unsigned int)g_finish_armed_seen,
+                (unsigned int)g_finish_max_count,
+                (unsigned int)g_finish_best_mask,
+                (unsigned int)g_finish_last_candidate_mask);
+        ui_plain_line(6, line);
         break;
 
     case UI_PAGE_TRACE:

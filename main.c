@@ -6,6 +6,11 @@
 
 #define CONTROL_PERIOD_US 20000U
 #define CONTROL_DT_MAX_US 50000U
+#define FINISH_ARM_TIME_US 16000000U
+#define FINISH_ARM_PULSES 1600000U
+#define FINISH_OUTER_RIGHT_MASK (1U << CH8)
+#define FINISH_INNER_RIGHT_MASK \
+    ((1U << CH5) | (1U << CH6) | (1U << CH7))
 
 //345164 电机最快速速度
 
@@ -17,6 +22,51 @@ int32_t control_err = 0;
 volatile uint32_t g_control_dt_us = 0U;
 volatile uint32_t g_control_dt_faults = 0U;
 volatile uint32_t g_imu_read_failures = 0U;
+volatile uint32_t g_lap_time_ms = 0U;
+volatile uint32_t g_lap_pulses = 0U;
+volatile uint8_t g_lap_recording = 0U;
+volatile uint8_t g_finish_armed_seen = 0U;
+volatile uint8_t g_finish_max_count = 0U;
+volatile uint8_t g_finish_best_mask = 0U;
+volatile uint8_t g_finish_last_candidate_mask = 0U;
+
+static uint32_t lap_start_us = 0U;
+static uint32_t lap_pulse_sum = 0U;
+
+static void lap_record_finish(uint32_t now_us)
+{
+    g_lap_pulses = lap_pulse_sum / 2U;
+    g_lap_time_ms = (uint32_t)(now_us - lap_start_us) / 1000U;
+    g_lap_recording = 0U;
+}
+
+static void lap_record_update(uint32_t now_us, int32_t dL, int32_t dR)
+{
+    bool run_requested = g_target_speed > 1.0f;
+
+    if (run_requested && !g_lap_recording) {
+        g_lap_recording = 1U;
+        lap_start_us = now_us;
+        lap_pulse_sum = 0U;
+        g_lap_time_ms = 0U;
+        g_lap_pulses = 0U;
+        g_finish_armed_seen = 0U;
+        g_finish_max_count = 0U;
+        g_finish_best_mask = 0U;
+        g_finish_last_candidate_mask = 0U;
+    }
+
+    if (g_lap_recording) {
+        uint32_t left = (dL < 0) ? (uint32_t)(-dL) : (uint32_t)dL;
+        uint32_t right = (dR < 0) ? (uint32_t)(-dR) : (uint32_t)dR;
+
+        lap_pulse_sum += left + right;
+
+        if (!run_requested) {
+            lap_record_finish(now_us);
+        }
+    }
+}
 
 int main(void)
 {
@@ -74,6 +124,7 @@ int main(void)
             g_control_dt_faults++;
             last_pid = now_us;
             Motor_Get_Delta(&dL, &dR);
+            lap_record_update(now_us, dL, dR);
         } else if (control_elapsed_us >= CONTROL_PERIOD_US) {
             float dt    = (float)control_elapsed_us * 1e-6f;
             float inv_dt = 1.0f / dt;
@@ -110,6 +161,40 @@ int main(void)
 
             /* ── 速度环 ── */
             Motor_Get_Delta(&dL, &dR);//速度不要/dt
+            lap_record_update(now_us, dL, dR);
+
+            if (g_lap_recording &&
+                ((uint32_t)(now_us - lap_start_us) >= FINISH_ARM_TIME_US) &&
+                (lap_pulse_sum >= FINISH_ARM_PULSES * 2U)) {
+                uint8_t mask = trace_get_active_mask();
+                uint8_t active_count = 0U;
+
+                g_finish_armed_seen = 1U;
+
+                for (uint8_t i = 0; i < TRACE_SENSOR_COUNT; i++) {
+                    if ((mask & (uint8_t)(1U << i)) != 0U) {
+                        active_count++;
+                    }
+                }
+
+                if (active_count > g_finish_max_count) {
+                    g_finish_max_count = active_count;
+                    g_finish_best_mask = mask;
+                }
+                if (active_count >= 2U) {
+                    g_finish_last_candidate_mask = mask;
+                }
+
+                if ((active_count >= 4U) ||
+                    (((mask & FINISH_OUTER_RIGHT_MASK) != 0U) &&
+                     ((mask & FINISH_INNER_RIGHT_MASK) != 0U))) {
+                    g_target_speed = 0.0f;
+                    current_base_speed = 0.0f;
+                    lap_record_finish(now_us);
+                    Knob_UI_Refresh();
+                }
+            }
+
             float speedL = (float)dL * inv_dt;                   /* 脉冲 */
             float speedR = (float)dR * inv_dt;
  

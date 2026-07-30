@@ -5,9 +5,11 @@ static int32_t last_valid_error = 0;
 static bool is_white_bg = true ;
 static bool adc_ok = true ;
 static bool line_valid = false;
+static uint8_t active_mask = 0U;
 
 bool ADC_OK(void){ return adc_ok; }
 bool trace_line_is_valid(void){ return line_valid; }
+uint8_t trace_get_active_mask(void){ return active_mask; }
 
 bool trace_is_white_bg(void) { return is_white_bg; }
 void trace_set_bg(bool white_bg){ is_white_bg = white_bg; }
@@ -107,6 +109,7 @@ int32_t trace_get_error(Trace_OUT_t *t)
     int32_t processed_val[TRACE_SENSOR_COUNT];
 
     line_valid = false;
+    active_mask = 0U;
 
     if (!adc_ok) {
         return 0;
@@ -125,8 +128,13 @@ int32_t trace_get_error(Trace_OUT_t *t)
         return last_valid_error;
     }
 
+    int32_t active_threshold = min_val + (max_val - min_val) / 3;
+
     for (uint8_t i = 0; i < TRACE_SENSOR_COUNT; i++) {
         int32_t value = processed_val[i] - min_val;
+        if (processed_val[i] > active_threshold) {
+            active_mask |= (uint8_t)(1U << i);
+        }
         numerator += value * t[i].weight;
         denominator += value;
     }
