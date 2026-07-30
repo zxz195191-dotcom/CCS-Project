@@ -31,3 +31,4 @@ bool ADC_OK(void);
 bool trace_line_is_valid(void);
 uint8_t trace_get_active_mask(void);
 void trace_set_bg(bool white_bg);
+void trace_set_weight_profile(bool mode1_boost);

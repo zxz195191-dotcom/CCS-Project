@@ -54,6 +54,7 @@ void OLED_Startup_Calib_Gyro(void);
 void        OLED_Encoder_Init(void);
 int8_t      OLED_Encoder_Read(void);              /* 1=CW, -1=CCW, 0=无 */
 uint8_t     OLED_Button_Read(void);               /* 0=NONE,1=CLICK,2=DOUBLE,3=LONG */
+uint32_t    OLED_Button_GetLastPressTimeUs(void);
 
 void        OLED_Menu_Tick(void);                 /* 主循环每轮调用 */
 void        OLED_Menu_Register(uint8_t page, uint8_t param_cnt);

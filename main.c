@@ -35,9 +35,9 @@
 #define MODE2_DEFAULT_BRAKE_START_PULSES 350000U
 #define MODE2_DEFAULT_STOP_LEAD_PULSES 500U
 #define MODE3_LAUNCH_SPEED 1000.0f
-#define MODE3_ACCEL_RATE 35000.0f
-#define MODE3_DECEL_RATE 50000.0f
-#define MODE3_CURVE_SPEED 52000.0f
+#define MODE3_ACCEL_RATE 40000.0f
+#define MODE3_DECEL_RATE 60000.0f
+#define MODE3_CURVE_SPEED 56000.0f
 #define MODE3_APPROACH_SPEED 10000.0f
 #define MODE3_B_BRAKE_START_PULSES 340000U
 #define MODE3_B_ENTRY_PULSES 425000U
@@ -45,8 +45,8 @@
 #define MODE3_D_BRAKE_START_PULSES 1120000U
 #define MODE3_D_ENTRY_PULSES 1215000U
 #define MODE3_A_FALLBACK_PULSES 1600000U
-#define MODE3_AFTER_A_CLEAR_PULSES 50000U
-#define MODE3_POST_A_BRAKE_PULSES 90000U
+#define MODE3_AFTER_A_CLEAR_PULSES 100000U
+#define MODE3_POST_A_BRAKE_PULSES 40000U
 
 //345164 电机最快速速度
 
@@ -72,6 +72,8 @@ static uint8_t mode2_brake_logged = 0U;
 static uint8_t mode3_plan_active = 0U;
 static uint8_t mode3_brake_logged = 0U;
 static uint32_t mode3_a_pass_pulse = 0U;
+static uint32_t race_start_request_us = 0U;
+static uint8_t race_start_request_valid = 0U;
 static uint32_t mode2_brake_start_pulses =
     MODE2_DEFAULT_BRAKE_START_PULSES;
 static uint32_t mode2_stop_lead_pulses =
@@ -83,7 +85,7 @@ static RaceModeConfig race_mode_profiles[3] = {
     /* Mode 2: independent smooth A-to-B profile; values remain field-tunable. */
     {80000.0f, 0.0005f, 0.08f, 8.0f, 2.0f, 0.0f, 426000U, 1U},
     /* Mode 3: smooth full lap, then stop only after fully crossing A. */
-    {75000.0f, 0.0005f, 0.08f, 8.0f, 2.0f, 0.0f, 1740000U, 1U}
+    {80000.0f, 0.0005f, 0.08f, 8.0f, 2.0f, 0.0f, 1740000U, 1U}
 };
 
 static RaceModeConfig *race_mode_profile(uint8_t mode)
@@ -112,12 +114,15 @@ void Race_Mode_Apply(void)
     g_imu_Kp = config->imu_kp;
     g_imu_Ki = config->imu_ki;
     trace_set_bg(true);
+    trace_set_weight_profile(g_race_mode == RACE_MODE_1);
 }
 
-void Race_Mode_Start(void)
+void Race_Mode_StartAt(uint32_t start_us)
 {
     if (g_race_logging_active || !Race_Mode_IsConfigured(g_race_mode)) return;
 
+    race_start_request_us = (start_us != 0U) ? start_us : Micros();
+    race_start_request_valid = 1U;
     Race_Mode_Apply();
     race_planned_stop_reason = RACE_STOP_NONE;
     mode2_brake_logged = 0U;
@@ -139,12 +144,18 @@ void Race_Mode_Start(void)
     }
 }
 
+void Race_Mode_Start(void)
+{
+    Race_Mode_StartAt(Micros());
+}
+
 void Race_Mode_Stop(void)
 {
     mode2_plan_active = 0U;
     mode3_plan_active = 0U;
     race_planned_stop_reason = RACE_STOP_NONE;
     g_target_speed = 0.0f;
+    if (!g_race_logging_active) race_start_request_valid = 0U;
 }
 
 float Race_Mode_GetRunSpeed(void)
@@ -184,6 +195,7 @@ uint8_t Race_Mode_Select(uint8_t mode)
     mode2_plan_active = 0U;
     mode3_plan_active = 0U;
     race_planned_stop_reason = RACE_STOP_NONE;
+    race_start_request_valid = 0U;
     g_target_speed = 0.0f;
     Race_Mode_Apply();
     return 1U;
@@ -489,7 +501,8 @@ static void race_log_start(uint32_t now_us)
     g_race_logging_active = 1U;
     g_lap_recording = 1U;
 
-    lap_start_us = now_us;
+    lap_start_us = race_start_request_valid ? race_start_request_us : now_us;
+    race_start_request_valid = 0U;
     lap_pulse_sum = 0U;
     g_lap_time_ms = 0U;
     g_lap_pulses = 0U;
@@ -539,6 +552,8 @@ static void race_log_complete(uint32_t now_us)
         (uint32_t)(now_us - lap_start_us) / 1000U;
     g_race_log.final_relative_yaw_x10 =
         (int16_t)(race_relative_yaw_deg * 10.0f);
+    g_lap_pulses = g_race_log.final_stop_pulse;
+    g_lap_time_ms = g_race_log.final_stop_time_ms;
     g_race_logging_active = 0U;
     g_race_log_ready = 1U;
     race_stop_pending = 0U;

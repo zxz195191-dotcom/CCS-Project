@@ -23,6 +23,7 @@ extern volatile uint8_t g_race_mode;
 
 void Race_Mode_Apply(void);
 void Race_Mode_Start(void);
+void Race_Mode_StartAt(uint32_t start_us);
 void Race_Mode_Stop(void);
 float Race_Mode_GetRunSpeed(void);
 float Race_Mode_GetCurveSpeed(void);

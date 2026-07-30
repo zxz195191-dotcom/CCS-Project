@@ -7,12 +7,28 @@ static bool adc_ok = true ;
 static bool line_valid = false;
 static uint8_t active_mask = 0U;
 
+static const int32_t trace_weights_normal[TRACE_SENSOR_COUNT] = {
+    -38, -26, -18, -5, 5, 18, 26, 38
+};
+static const int32_t trace_weights_mode1[TRACE_SENSOR_COUNT] = {
+    -50, -40, -30, -5, 5, 30,40, 50
+};
+
 bool ADC_OK(void){ return adc_ok; }
 bool trace_line_is_valid(void){ return line_valid; }
 uint8_t trace_get_active_mask(void){ return active_mask; }
 
 bool trace_is_white_bg(void) { return is_white_bg; }
 void trace_set_bg(bool white_bg){ is_white_bg = white_bg; }
+
+void trace_set_weight_profile(bool mode1_boost)
+{
+    const int32_t *weights = mode1_boost ?
+        trace_weights_mode1 : trace_weights_normal;
+    for (uint8_t i = 0U; i < TRACE_SENSOR_COUNT; i++) {
+        sensors[i].weight = weights[i];
+    }
+}
 
 void trace_init() {
     // 1. 先停用 ADC（拔插头，方便我们改接线）
@@ -26,14 +42,7 @@ void trace_init() {
         DL_ADC12_SAMP_CONV_RES_12_BIT, 
         DL_ADC12_SAMP_CONV_DATA_FORMAT_UNSIGNED);
 
-    sensors[CH1].weight = -38;
-    sensors[CH2].weight = -26;
-    sensors[CH3].weight = -18;
-    sensors[CH4].weight = -5;
-    sensors[CH5].weight =  5;
-    sensors[CH6].weight =  18;
-    sensors[CH7].weight =  26;
-    sensors[CH8].weight =  38;
+    trace_set_weight_profile(false);
 
     // 3. 重新插上插头（使能 ADC），准备接客
     DL_ADC12_enableConversions(OUT_INST);

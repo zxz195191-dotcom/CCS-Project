@@ -532,6 +532,13 @@ int8_t OLED_Encoder_Read(void)
 #define BTN_DEBOUNCE_MS  20U
 #define BTN_LONG_MS      800U
 
+static uint32_t btn_last_press_time_us = 0U;
+
+uint32_t OLED_Button_GetLastPressTimeUs(void)
+{
+    return btn_last_press_time_us;
+}
+
 ButtonEvent OLED_Button_Read(void)
 {
     static uint8_t raw_last = 1;
@@ -552,6 +559,7 @@ ButtonEvent OLED_Button_Read(void)
         (uint32_t)(now_us - raw_changed_us) >= BTN_DEBOUNCE_MS * 1000U) {
         stable = now;
         if (stable == 0) {
+            btn_last_press_time_us = raw_changed_us;
             pressed_us = now_us;
             long_fired = 0;
         } else if (!long_fired) {

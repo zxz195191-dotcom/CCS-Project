@@ -231,7 +231,7 @@ static void ui_process(int8_t enc, uint8_t button)
     } else if (ui_state == UI_PARAM_SELECT) {
         if (ui_page == UI_PAGE_MOTOR && ui_param == 3) {
             if (g_target_speed > 1.0f) Race_Mode_Stop();
-            else Race_Mode_Start();
+            else Race_Mode_StartAt(OLED_Button_GetLastPressTimeUs());
         } else if (ui_page == UI_PAGE_GYRO && ui_param == 1) {
             ui_calibrate_gyro();
         } else if (ui_page == UI_PAGE_IO && ui_param == 1) {
@@ -416,8 +416,9 @@ void Knob_UI_Show(void)
         selected = (ui_state != UI_PAGE_SELECT && ui_param == 3);
         ui_line(4, selected,
                 (g_target_speed > 1.0f) ? "RUN:STOP" : "RUN:START");
-        sprintf(line, "T:%4.1f P:%7lu",
-                (double)g_lap_time_ms / 1000.0,
+        sprintf(line, "T:%2lu.%1lu P:%7lu",
+                (unsigned long)(g_lap_time_ms / 1000U),
+                (unsigned long)((g_lap_time_ms / 100U) % 10U),
                 (unsigned long)g_lap_pulses);
         ui_plain_line(5, line);
         break;
@@ -474,6 +475,7 @@ void Knob_UI_Show(void)
 
     case UI_PAGE_RUN_LOG: {
         char reason = 'N';
+        uint32_t total_tenths = g_race_log.final_stop_time_ms / 100U;
         if (g_race_log.stop_reason == RACE_STOP_CALIBRATION_PULSE) reason = 'P';
         else if (g_race_log.stop_reason == RACE_STOP_MANUAL) reason = 'M';
         else if (g_race_log.stop_reason == RACE_STOP_FINISH_LINE) reason = 'L';
@@ -499,9 +501,9 @@ void Knob_UI_Show(void)
             ui_plain_line(4, line);
             sprintf(line, "ERR:%+7ld", (long)stop_error);
             ui_plain_line(5, line);
-            sprintf(line, "T:%4lu/%4lu",
-                    (unsigned long)g_race_log.stop_command_time_ms,
-                    (unsigned long)g_race_log.final_stop_time_ms);
+            sprintf(line, "T:%lu.%lus TOTAL",
+                    (unsigned long)(total_tenths / 10U),
+                    (unsigned long)(total_tenths % 10U));
             ui_plain_line(6, line);
             sprintf(line, "G:%3u TARGET:B",
                     (unsigned int)(g_race_log.max_abs_gyro_dps_x10 / 10U));
@@ -530,8 +532,9 @@ void Knob_UI_Show(void)
             sprintf(line, "STP:%7lu",
                     (unsigned long)g_race_log.final_stop_pulse);
             ui_plain_line(6, line);
-            sprintf(line, "T:%5lu G:%3u%c",
-                    (unsigned long)g_race_log.stop_command_time_ms,
+            sprintf(line, "T:%lu.%lus G:%3u%c",
+                    (unsigned long)(total_tenths / 10U),
+                    (unsigned long)(total_tenths % 10U),
                     (unsigned int)(g_race_log.max_abs_gyro_dps_x10 / 10U),
                     reason);
             ui_plain_line(7, line);
@@ -557,8 +560,9 @@ void Knob_UI_Show(void)
         ui_plain_line(5, line);
         sprintf(line, "STP:%7lu", (unsigned long)g_race_log.final_stop_pulse);
         ui_plain_line(6, line);
-        sprintf(line, "T:%5lu G:%3u%c",
-                (unsigned long)g_race_log.stop_command_time_ms,
+        sprintf(line, "T:%lu.%lus G:%3u%c",
+                (unsigned long)(total_tenths / 10U),
+                (unsigned long)(total_tenths % 10U),
                 (unsigned int)(g_race_log.max_abs_gyro_dps_x10 / 10U),
                 reason);
         ui_plain_line(7, line);
