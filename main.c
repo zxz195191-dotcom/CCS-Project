@@ -13,10 +13,7 @@
 volatile float g_target_speed = 0.0f;       /* spd 命令 */
 float current_base_speed = 0;
 volatile float g_K_steer      = 15.0f;      /* steer 命令：转向 P */ //10-5
-volatile float g_steer_Kd     = 15.55f;     /* steerd 命令：转向 D */
 int32_t control_err = 0;
-float filter_error = 0.0f;
-float alpha = 0.60f;
 volatile uint32_t g_control_dt_us = 0U;
 volatile uint32_t g_control_dt_faults = 0U;
 volatile uint32_t g_imu_read_failures = 0U;
@@ -52,10 +49,6 @@ int main(void)
     PID_Init(&PID_Right, p, i, 0.0f, 400.0f, 15000.0f);
 
     int32_t  dL, dR;
-    float    last_trace_err = 0.0f;
-    bool previous_normal_line = false;
-    bool current_normal_line = false;
-    bool allow_d = false;
 
   //  Buzzer_SetTone(2000);
     LED_Set(true); 
@@ -101,66 +94,41 @@ int main(void)
             trace_readByADC();
             int32_t trace_err = trace_get_error(sensors);
 
-            if (!ADC_OK()) {
-                /* ADC 转换失败时停机，避免沿用上一帧数据继续行驶。 */
-                current_base_speed = 0.0f;
-                filter_error = 0.0f;
-                last_trace_err = 0.0f;
-            }else{
-                current_base_speed = g_target_speed;
+            if (ADC_OK()) {
                 control_err = trace_err;
-                filter_error += alpha *
-                    ((float)control_err - filter_error);
-                if (fabsf(filter_error) < 0.1f) {
-                    filter_error = 0.0f;
-                }
-            }
-
-            current_normal_line = ADC_OK() && trace_line_is_valid();
-            allow_d = current_normal_line && previous_normal_line;
-
-            float steer_error = filter_error;
-            if (steer_error > 5.0f) {
-                steer_error -= 5.0f;
-            } else if (steer_error < -5.0f) {
-                steer_error += 5.0f;
+                current_base_speed = g_target_speed;
             } else {
-                steer_error = 0.0f;
+                control_err = 0;
+                current_base_speed = 0.0f;
             }
 
-            float steer_P = g_K_steer * steer_error;
-            float steer_D = 0.0f;
-            if (allow_d) {
-                steer_D = g_steer_Kd *
-                    (steer_error - last_trace_err);
-                if (steer_D > 150.0f) steer_D = 150.0f;
-                if (steer_D < -150.0f) steer_D = -150.0f;
-            }
-            last_trace_err = steer_error;
-            previous_normal_line = current_normal_line;
-            float steering = (steer_P + steer_D) * (current_base_speed / 1000.0f);
-
-            float target_L = (current_base_speed < 1.0f) ? 0.0f : current_base_speed + steering;
-            float target_R = (current_base_speed < 1.0f) ? 0.0f : current_base_speed - steering;
-            if (target_L < -200000) target_L = -200000;
-            if (target_L >  200000) target_L =  200000;
-            if (target_R < -200000) target_R = -200000;
-            if (target_R >  200000) target_R =  200000;
+            /* 最终循迹逻辑：当前重心误差直接做比例差速。 */
+            float steering = g_K_steer * (float)control_err *
+                (current_base_speed / 1000.0f);
+            float target_L = current_base_speed + steering;
+            float target_R = current_base_speed - steering;
 
             /* ── 速度环 ── */
             Motor_Get_Delta(&dL, &dR);//速度不要/dt
             float speedL = (float)dL * inv_dt;                   /* 脉冲 */
             float speedR = (float)dR * inv_dt;
  
-            float pwm_left  = PID_Compute(&PID_Left,  target_L, speedL, dt);
-            float pwm_right = PID_Compute(&PID_Right, target_R, speedR, dt);
+            float pwm_left = 0.0f;
+            float pwm_right = 0.0f;
+            if (current_base_speed > 0.0f) {
+                pwm_left = PID_Compute(&PID_Left, target_L, speedL, dt);
+                pwm_right = PID_Compute(&PID_Right, target_R, speedR, dt);
+            } else {
+                PID_Left.integral = 0.0f;
+                PID_Right.integral = 0.0f;
+            }
 
             Motor_Set_Speed(Left_Wheel,  (int32_t)pwm_left);
             Motor_Set_Speed(Right_Wheel, (int32_t)pwm_right);
             
             /* Vofa ch1..5: base, speedL, speedR, trace_err, yaw */
             uart_send_float5(current_base_speed, speedL, speedR,
-                filter_error * 2500.0f, yaw);
+                (float)control_err, yaw);
             
         }//白色的话 大于0 黑色小于0   黑色大于0
         Knob_Tick();

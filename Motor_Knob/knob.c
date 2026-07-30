@@ -9,9 +9,7 @@
 
 extern volatile float g_target_speed;
 extern volatile float g_K_steer;
-extern volatile float g_steer_Kd;
-extern float filter_error;
-extern float alpha;
+extern int32_t control_err;
 extern float current_base_speed;
 
 static int32_t enc_cnt = 0;
@@ -45,7 +43,7 @@ static uint8_t ui_param_count(UiPage page)
 {
     switch (page) {
     case UI_PAGE_MOTOR: return 4U;
-    case UI_PAGE_TRACE: return 4U;
+    case UI_PAGE_TRACE: return 2U;
     case UI_PAGE_GYRO:  return 2U;
     case UI_PAGE_IO:    return 2U;
     case UI_PAGE_RAW:   return 1U;
@@ -109,14 +107,6 @@ static void ui_adjust_value(int8_t delta)
             g_K_steer += (float)delta * 0.5f;
             if (g_K_steer < 0.0f) g_K_steer = 0.0f;
             if (g_K_steer > 100.0f) g_K_steer = 100.0f;
-        } else if (ui_param == 2) {
-            g_steer_Kd += (float)delta * 0.05f;
-            if (g_steer_Kd < 0.0f) g_steer_Kd = 0.0f;
-            if (g_steer_Kd > 100.0f) g_steer_Kd = 100.0f;
-        } else if (ui_param == 3) {
-            alpha += (float)delta * 0.01f;
-            if (alpha < 0.0f) alpha = 0.0f;
-            if (alpha > 1.0f) alpha = 1.0f;
         }
         break;
 
@@ -247,7 +237,7 @@ void Knob_UI_Show(void)
         ui_last_draw = now;
         if (ui_page == UI_PAGE_TRACE) {
             selected = (ui_state != UI_PAGE_SELECT && ui_param == 0);
-            sprintf(line, "ERR:%6d", (int)filter_error);
+            sprintf(line, "ERR:%6d", (int)control_err);
             ui_line(1, selected, line);
         } else if (ui_page == UI_PAGE_GYRO) {
             selected = (ui_state != UI_PAGE_SELECT && ui_param == 0);
@@ -262,8 +252,8 @@ void Knob_UI_Show(void)
                         (unsigned int)sensors[ch + 1U].current_ADC);
                 ui_plain_line((uint8_t)(row + 1U), line);
             }
-            sprintf(line, "ERR:%+3d A:%u", (int)filter_error,
-                    (unsigned int)ADC_OK());
+            sprintf(line, "ERR:%+3d V:%u", (int)control_err,
+                    (unsigned int)trace_line_is_valid());
             ui_plain_line(5, line);
         }
         return;
@@ -304,17 +294,15 @@ void Knob_UI_Show(void)
         sprintf(line, "TRACE %s", state_name);
         ui_plain_line(0, line);
         selected = (ui_state != UI_PAGE_SELECT && ui_param == 0);
-        sprintf(line, "ERR:%6d", (int)filter_error);
+        sprintf(line, "ERR:%6d", (int)control_err);
         ui_line(1, selected, line);
         selected = (ui_state != UI_PAGE_SELECT && ui_param == 1);
         sprintf(line, "K:%+.2f", (double)g_K_steer);
         ui_line(2, selected, line);
-        selected = (ui_state != UI_PAGE_SELECT && ui_param == 2);
-        sprintf(line, "D:%+.2f", (double)g_steer_Kd);
-        ui_line(3, selected, line);
-        selected = (ui_state != UI_PAGE_SELECT && ui_param == 3);
-        sprintf(line, "ALPHA:%+.2f", (double)alpha);
-        ui_line(4, selected, line);
+        sprintf(line, "LINE:%u ADC:%u",
+                (unsigned int)trace_line_is_valid(),
+                (unsigned int)ADC_OK());
+        ui_plain_line(3, line);
         break;
 
     case UI_PAGE_GYRO:
@@ -342,8 +330,8 @@ void Knob_UI_Show(void)
                     (unsigned int)sensors[ch + 1U].current_ADC);
             ui_plain_line((uint8_t)(row + 1U), line);
         }
-        sprintf(line, "ERR:%+3d A:%u", (int)filter_error,
-                (unsigned int)ADC_OK());
+        sprintf(line, "ERR:%+3d V:%u", (int)control_err,
+                (unsigned int)trace_line_is_valid());
         ui_plain_line(5, line);
         break;
 

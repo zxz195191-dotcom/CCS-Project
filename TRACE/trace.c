@@ -4,10 +4,10 @@ Trace_OUT_t sensors[TRACE_SENSOR_COUNT];
 static int32_t last_valid_error = 0;
 static bool is_white_bg = true ;
 static bool adc_ok = true ;
-static bool normal_line = false;
+static bool line_valid = false;
 
 bool ADC_OK(void){ return adc_ok; }
-bool trace_line_is_valid(void){ return normal_line; }
+bool trace_line_is_valid(void){ return line_valid; }
 
 bool trace_is_white_bg(void) { return is_white_bg; }
 void trace_set_bg(bool white_bg){ is_white_bg = white_bg; }
@@ -24,14 +24,14 @@ void trace_init() {
         DL_ADC12_SAMP_CONV_RES_12_BIT, 
         DL_ADC12_SAMP_CONV_DATA_FORMAT_UNSIGNED);
 
-    sensors[CH1].weight = -40;
-    sensors[CH2].weight = -30;
-    sensors[CH3].weight = -20;
+    sensors[CH1].weight = -35;
+    sensors[CH2].weight = -25;
+    sensors[CH3].weight = -15;
     sensors[CH4].weight = -5;
     sensors[CH5].weight =  5;
-    sensors[CH6].weight =  20;
-    sensors[CH7].weight =  30;
-    sensors[CH8].weight =  40;
+    sensors[CH6].weight =  15;
+    sensors[CH7].weight =  25;
+    sensors[CH8].weight =  35;
 
     // 3. 重新插上插头（使能 ADC），准备接客
     DL_ADC12_enableConversions(OUT_INST);
@@ -106,10 +106,10 @@ int32_t trace_get_error(Trace_OUT_t *t)
     int32_t min_val = 4095;
     int32_t processed_val[TRACE_SENSOR_COUNT];
 
-    normal_line = false;
+    line_valid = false;
 
     if (!adc_ok) {
-        return last_valid_error;
+        return 0;
     }
 
     for (uint8_t i = 0; i < TRACE_SENSOR_COUNT; i++) {
@@ -123,26 +123,19 @@ int32_t trace_get_error(Trace_OUT_t *t)
 
     if ((max_val - min_val) < 800) {
         return last_valid_error;
-    } else {
-        int32_t noise_threshold = min_val + (max_val - min_val) / 3;
-        for (uint8_t i = 0; i < TRACE_SENSOR_COUNT; i++) {
-            int32_t value = processed_val[i];
-            if (value > noise_threshold) {
-                value -= noise_threshold;
-            } else {
-                value = 0;
-            }
+    }
 
-            numerator += value * t[i].weight;
-            denominator += value;
-        }
+    for (uint8_t i = 0; i < TRACE_SENSOR_COUNT; i++) {
+        int32_t value = processed_val[i] - min_val;
+        numerator += value * t[i].weight;
+        denominator += value;
     }
 
     if (denominator == 0) {
         return last_valid_error;
     }
 
+    line_valid = true;
     last_valid_error = numerator / denominator;
-    normal_line = true;
     return last_valid_error;
 }

@@ -20,7 +20,6 @@ extern float gyro_bias[3];
 extern void Gyro_Calibrate_Bias(uint16_t samples);
 extern volatile float g_target_speed;
 extern volatile float g_K_steer;
-extern volatile float g_steer_Kd;
 
 /* ── 前向声明 ── */
 static void cmd_push_char(char c);
@@ -175,9 +174,6 @@ static void cmd_execute(char *line)
     } else if (cmd_strcmp_nocase(cmd, "steer") == 0) {
         g_K_steer = val;
         cmd_respond_float("SteerP", g_K_steer);
-    } else if (cmd_strcmp_nocase(cmd, "steerd") == 0) {
-        g_steer_Kd = val;
-        cmd_respond_float("SteerD", g_steer_Kd);
     } else if (cmd_strcmp_nocase(cmd, "reset") == 0) {
         g_motor_Kp = 0.0005f;
         g_motor_Ki = 0.08f;
@@ -195,7 +191,7 @@ static void cmd_execute(char *line)
             cmd_reply("Wdf?\r\n");
         }
     }else{
-        cmd_reply("? [kp N] [ki N] [imukp N] [imuki N] [spd N] [steer N] [steerd N] [cal] [bias] [show] [reset]\r\n");
+        cmd_reply("? [kp N] [ki N] [imukp N] [imuki N] [spd N] [steer N] [cal] [bias] [show] [reset]\r\n");
     }
 }
 
