@@ -1,5 +1,6 @@
 #include "headfile.h"
 #include "cmd_parser.h"
+#include "race_mode.h"
 
 /* ── 环形缓冲区（ISR 写，主循环读）── */
 #define RX_BUF_SIZE 64
@@ -114,9 +115,11 @@ static void cmd_execute(char *line)
 
     /* ── SHOW ── */
     if (cmd_strcmp_nocase(line, "show") == 0) {
-        char buf[64];
-        sprintf(buf, "MotorKp=%.4f MotorKi=%.4f ImuKp=%.4f ImuKi=%.4f\r\n",
+        char buf[96];
+        sprintf(buf, "Mode=%u MotorKp=%.4f MotorKi=%.4f Steer=%.2f ImuKp=%.4f ImuKi=%.4f\r\n",
+                (unsigned int)g_race_mode,
                 (double)g_motor_Kp, (double)g_motor_Ki,
+                (double)g_K_steer,
                 (double)g_imu_Kp, (double)g_imu_Ki);
         cmd_reply(buf);
         return;
@@ -145,17 +148,29 @@ static void cmd_execute(char *line)
     }
 
     if (cmd_strcmp_nocase(cmd, "kp") == 0) {
-        g_motor_Kp = val;
-        cmd_respond_float("MotorKp", g_motor_Kp);
+        if (Race_Mode_ParametersLocked()) cmd_reply("MODE1 LOCKED\r\n");
+        else {
+            g_motor_Kp = val;
+            cmd_respond_float("MotorKp", g_motor_Kp);
+        }
     } else if (cmd_strcmp_nocase(cmd, "ki") == 0) {
-        g_motor_Ki = val;
-        cmd_respond_float("MotorKi", g_motor_Ki);
+        if (Race_Mode_ParametersLocked()) cmd_reply("MODE1 LOCKED\r\n");
+        else {
+            g_motor_Ki = val;
+            cmd_respond_float("MotorKi", g_motor_Ki);
+        }
     } else if (cmd_strcmp_nocase(cmd, "imukp") == 0) {
-        g_imu_Kp = val;
-        cmd_respond_float("ImuKp", g_imu_Kp);
+        if (Race_Mode_ParametersLocked()) cmd_reply("MODE1 LOCKED\r\n");
+        else {
+            g_imu_Kp = val;
+            cmd_respond_float("ImuKp", g_imu_Kp);
+        }
     } else if (cmd_strcmp_nocase(cmd, "imuki") == 0) {
-        g_imu_Ki = val;
-        cmd_respond_float("ImuKi", g_imu_Ki);
+        if (Race_Mode_ParametersLocked()) cmd_reply("MODE1 LOCKED\r\n");
+        else {
+            g_imu_Ki = val;
+            cmd_respond_float("ImuKi", g_imu_Ki);
+        }
     } else if (cmd_strcmp_nocase(cmd, "cal") == 0) {
         cmd_reply("Calibrating gyro 5s, keep STILL!\r\n");
         Gyro_Calibrate_Bias(5000);
@@ -169,17 +184,26 @@ static void cmd_execute(char *line)
                 (double)gyro_bias[0], (double)gyro_bias[1], (double)gyro_bias[2]);
         cmd_reply(buf);
     } else if (cmd_strcmp_nocase(cmd, "spd") == 0) {
-        g_target_speed = val;
+        if (Race_Mode_ParametersLocked()) {
+            if (val > 1.0f) Race_Mode_Start();
+            else Race_Mode_Stop();
+        } else {
+            g_target_speed = val;
+        }
         cmd_respond_float("Speed", g_target_speed);
     } else if (cmd_strcmp_nocase(cmd, "steer") == 0) {
-        g_K_steer = val;
-        cmd_respond_float("SteerP", g_K_steer);
+        if (Race_Mode_ParametersLocked()) cmd_reply("MODE1 LOCKED\r\n");
+        else {
+            g_K_steer = val;
+            cmd_respond_float("SteerP", g_K_steer);
+        }
     } else if (cmd_strcmp_nocase(cmd, "reset") == 0) {
-        g_motor_Kp = 0.0005f;
-        g_motor_Ki = 0.08f;
-        cmd_reply("Motor PID reset: Kp=0.0005 Ki=0.08\r\n");
+        Race_Mode_Apply();
+        cmd_reply("Current mode profile restored\r\n");
     } else if(cmd_strcmp_nocase(cmd, "bg") == 0){
-        if(val == 0.0f ){
+        if (Race_Mode_ParametersLocked()) {
+            cmd_reply("MODE1 LOCKED\r\n");
+        } else if(val == 0.0f ){
             trace_set_bg(false);
             cmd_reply("Black\r\n");
             cmd_reply("Black\r\n");

@@ -4,12 +4,17 @@
 #include "headfile.h"
 #include "cmd_parser.h"
 #include "race_log.h"
+#include "race_mode.h"
 
 #define CONTROL_PERIOD_US 20000U
 #define CONTROL_DT_MAX_US 50000U
-#define CALIBRATION_STOP_PULSES 1598000U
 #define FINISH_LOG_START_PULSES 1500000U
 #define FINISH_MASK_STABLE_CYCLES 2U
+#define FINISH_PATTERN_STABLE_CYCLES 1U
+#define FINISH_RIGHT_CH4_CH7_MASK \
+    ((1U << CH4) | (1U << CH5) | (1U << CH6) | (1U << CH7))
+#define FINISH_RIGHT_CH5_CH8_MASK \
+    ((1U << CH5) | (1U << CH6) | (1U << CH7) | (1U << CH8))
 #define RACE_STOP_STABLE_CYCLES 10U
 #define RACE_STOP_DELTA_LIMIT 2U
 #define TURN_ENTRY_RAW_DPS 5.0f
@@ -40,6 +45,65 @@ volatile uint8_t g_lap_recording = 0U;
 RaceRunLog g_race_log;
 volatile uint8_t g_race_log_ready = 0U;
 volatile uint8_t g_race_logging_active = 0U;
+volatile uint8_t g_race_mode = RACE_MODE_1;
+
+static const RaceModeConfig race_mode_profiles[3] = {
+    /* Mode 1: sealed 20 s lap / A-point precision-stop baseline. */
+    {100000.0f, 0.0005f, 0.08f, 8.0f, 2.0f, 0.0f, 1603000U, 1U},
+    /* Modes 2 and 3 are reserved until their own calibration is complete. */
+    {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0U, 0U},
+    {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0U, 0U}
+};
+
+static const RaceModeConfig *race_mode_current_config(void)
+{
+    uint8_t index = g_race_mode;
+    if (index < RACE_MODE_1 || index > RACE_MODE_3) {
+        return &race_mode_profiles[0];
+    }
+
+    const RaceModeConfig *config = &race_mode_profiles[index - RACE_MODE_1];
+    return config->configured ? config : &race_mode_profiles[0];
+}
+
+void Race_Mode_Apply(void)
+{
+    const RaceModeConfig *config = race_mode_current_config();
+    g_motor_Kp = config->motor_kp;
+    g_motor_Ki = config->motor_ki;
+    g_K_steer = config->steer_k;
+    g_imu_Kp = config->imu_kp;
+    g_imu_Ki = config->imu_ki;
+    if (g_race_mode == RACE_MODE_1) {
+        trace_set_bg(true);
+    }
+}
+
+void Race_Mode_Start(void)
+{
+    Race_Mode_Apply();
+    g_target_speed = race_mode_current_config()->run_speed;
+}
+
+void Race_Mode_Stop(void)
+{
+    g_target_speed = 0.0f;
+}
+
+float Race_Mode_GetRunSpeed(void)
+{
+    return race_mode_current_config()->run_speed;
+}
+
+uint32_t Race_Mode_GetStopPulses(void)
+{
+    return race_mode_current_config()->stop_pulses;
+}
+
+uint8_t Race_Mode_ParametersLocked(void)
+{
+    return (g_race_mode == RACE_MODE_1) ? 1U : 0U;
+}
 
 static uint32_t lap_start_us = 0U;
 static uint32_t lap_pulse_sum = 0U;
@@ -63,6 +127,9 @@ static uint8_t race_mask_candidate_count = 0U;
 static uint32_t race_mask_candidate_pulse = 0U;
 static uint8_t race_last_logged_mask = 0U;
 static uint8_t race_mask_log_started = 0U;
+static uint8_t race_finish_pattern_count = 0U;
+static uint32_t race_finish_pattern_pulse = 0U;
+static uint8_t race_finish_pattern_mask = 0U;
 
 static uint32_t race_current_pulses(void)
 {
@@ -81,6 +148,7 @@ static int8_t race_signf(float value)
 
 static void race_log_start(uint32_t now_us)
 {
+    Race_Mode_Apply();
     race_run_counter++;
     g_race_log = (RaceRunLog){0};
     g_race_log.run_number = race_run_counter;
@@ -112,6 +180,9 @@ static void race_log_start(uint32_t now_us)
     race_mask_candidate_pulse = 0U;
     race_last_logged_mask = 0U;
     race_mask_log_started = 0U;
+    race_finish_pattern_count = 0U;
+    race_finish_pattern_pulse = 0U;
+    race_finish_pattern_mask = 0U;
 }
 
 static void race_request_stop(uint32_t now_us, RaceStopReason reason)
@@ -157,12 +228,6 @@ static void race_finish_mask_commit(uint32_t pulse, uint8_t mask)
         g_race_log.finish_event_overflow = 1U;
     }
 
-    if (g_race_log.first_finish_candidate_pulse == 0U &&
-        (mask & (uint8_t)(1U << CH8)) != 0U &&
-        (mask & (uint8_t)~(1U << CH8)) != 0U) {
-        g_race_log.first_finish_candidate_pulse = pulse;
-        g_race_log.first_finish_candidate_mask = mask;
-    }
 }
 
 static void race_log_finish_mask(uint8_t mask)
@@ -185,6 +250,44 @@ static void race_log_finish_mask(uint8_t mask)
                                     race_mask_candidate);
         }
     }
+}
+
+static uint8_t race_finish_pattern_matches(uint8_t mask)
+{
+    uint8_t ch4_ch7 = (uint8_t)FINISH_RIGHT_CH4_CH7_MASK;
+    uint8_t ch5_ch8 = (uint8_t)FINISH_RIGHT_CH5_CH8_MASK;
+    return (((mask & ch4_ch7) == ch4_ch7) ||
+            ((mask & ch5_ch8) == ch5_ch8)) ? 1U : 0U;
+}
+
+static uint8_t race_finish_line_confirmed(uint8_t mask)
+{
+    uint32_t pulse = race_current_pulses();
+    uint8_t in_final_curve =
+        (g_race_log.phase == RACE_PHASE_DA ||
+         g_race_log.phase == RACE_PHASE_AFTER_A) ? 1U : 0U;
+
+    if (pulse < FINISH_LOG_START_PULSES ||
+        !in_final_curve ||
+        !race_finish_pattern_matches(mask)) {
+        race_finish_pattern_count = 0U;
+        return 0U;
+    }
+
+    if (race_finish_pattern_count == 0U) {
+        race_finish_pattern_pulse = pulse;
+        race_finish_pattern_mask = mask;
+    }
+    if (race_finish_pattern_count < FINISH_PATTERN_STABLE_CYCLES) {
+        race_finish_pattern_count++;
+    }
+
+    if (race_finish_pattern_count >= FINISH_PATTERN_STABLE_CYCLES) {
+        g_race_log.first_finish_candidate_pulse = race_finish_pattern_pulse;
+        g_race_log.first_finish_candidate_mask = race_finish_pattern_mask;
+        return 1U;
+    }
+    return 0U;
 }
 
 static void race_reset_entry_candidate(void)
@@ -367,6 +470,7 @@ int main(void)
     Knob_Init();
     OLED_Init();
     trace_init();
+    Race_Mode_Apply();
     OLED_Encoder_Init();
 
     DL_TimerA_startCounter(WHEELS_INST);
@@ -376,10 +480,8 @@ int main(void)
 
     
     /* 速度环 PID（脉冲/秒 单位） */
-    float p = 0.0005f;//0.001 0.0005 
-    float i = 0.08f;//0.55 0.3 0.2 0.1 0.09 0.08
-    PID_Init(&PID_Left,  p, i, 0.0f, 400.0f, 15000.0f);
-    PID_Init(&PID_Right, p, i, 0.0f, 400.0f, 15000.0f);
+    PID_Init(&PID_Left,  g_motor_Kp, g_motor_Ki, 0.0f, 400.0f, 15000.0f);
+    PID_Init(&PID_Right, g_motor_Kp, g_motor_Ki, 0.0f, 400.0f, 15000.0f);
 
     int32_t  dL, dR;
 
@@ -455,8 +557,15 @@ int main(void)
             }
 
             if (g_lap_recording &&
-                (race_current_pulses() >= CALIBRATION_STOP_PULSES)) {
-                g_target_speed = 0.0f;
+                race_finish_line_confirmed(trace_get_active_mask())) {
+                Race_Mode_Stop();
+                current_base_speed = 0.0f;
+                race_request_stop(now_us, RACE_STOP_FINISH_LINE);
+            }
+
+            if (g_lap_recording &&
+                (race_current_pulses() >= Race_Mode_GetStopPulses())) {
+                Race_Mode_Stop();
                 current_base_speed = 0.0f;
                 race_request_stop(now_us, RACE_STOP_CALIBRATION_PULSE);
             }

@@ -7,7 +7,8 @@
 typedef enum {
     RACE_STOP_NONE = 0,
     RACE_STOP_CALIBRATION_PULSE,
-    RACE_STOP_MANUAL
+    RACE_STOP_MANUAL,
+    RACE_STOP_FINISH_LINE
 } RaceStopReason;
 
 typedef enum {
@@ -47,4 +48,3 @@ typedef struct {
 extern RaceRunLog g_race_log;
 extern volatile uint8_t g_race_log_ready;
 extern volatile uint8_t g_race_logging_active;
-

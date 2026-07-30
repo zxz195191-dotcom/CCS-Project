@@ -1,12 +1,12 @@
 #include "headfile.h"
 #include "../race_log.h"
+#include "../race_mode.h"
 
 #define KNOB_BTN_CLICK       1U
 #define KNOB_BTN_LONG        3U
 #define OLED_UI_REFRESH_US   200000U
 #define OLED_UI_LIVE_US      500000U
 #define OLED_UI_SPEED_LIMIT  30000.0f
-#define MOTOR_RUN_SPEED      100000.0f
 
 extern volatile float g_target_speed;
 extern volatile float g_K_steer;
@@ -108,6 +108,11 @@ static void ui_adjust_frequency(int8_t delta)
 
 static void ui_adjust_value(int8_t delta)
 {
+    if (Race_Mode_ParametersLocked() &&
+        (ui_page == UI_PAGE_MOTOR || ui_page == UI_PAGE_TRACE)) {
+        return;
+    }
+
     switch (ui_page) {
     case UI_PAGE_MOTOR:
         if (ui_param == 0) {
@@ -182,8 +187,8 @@ static void ui_process(int8_t enc, uint8_t button)
         ui_param = 0;
     } else if (ui_state == UI_PARAM_SELECT) {
         if (ui_page == UI_PAGE_MOTOR && ui_param == 3) {
-            g_target_speed = (g_target_speed > 1.0f) ?
-                0.0f : MOTOR_RUN_SPEED;
+            if (g_target_speed > 1.0f) Race_Mode_Stop();
+            else Race_Mode_Start();
         } else if (ui_page == UI_PAGE_GYRO && ui_param == 1) {
             ui_calibrate_gyro();
         } else if (ui_page == UI_PAGE_IO && ui_param == 1) {
@@ -194,7 +199,10 @@ static void ui_process(int8_t enc, uint8_t button)
                    !(ui_page == UI_PAGE_RAW) &&
                    !(ui_page == UI_PAGE_RUN_LOG) &&
                    !(ui_page == UI_PAGE_MASK_LOG_1) &&
-                   !(ui_page == UI_PAGE_MASK_LOG_2)) {
+                   !(ui_page == UI_PAGE_MASK_LOG_2) &&
+                   !(Race_Mode_ParametersLocked() &&
+                     ((ui_page == UI_PAGE_MOTOR && ui_param < 3) ||
+                      (ui_page == UI_PAGE_TRACE && ui_param == 1)))) {
             ui_state = UI_EDIT;
         }
     } else {
@@ -301,10 +309,17 @@ void Knob_UI_Show(void)
 
     switch (ui_page) {
     case UI_PAGE_MOTOR:
-        sprintf(line, "MOTOR %s", state_name);
+        if (Race_Mode_ParametersLocked()) {
+            sprintf(line, "M%u MOTOR LOCK", (unsigned int)g_race_mode);
+        } else {
+            sprintf(line, "M%u MOTOR %s",
+                    (unsigned int)g_race_mode, state_name);
+        }
         ui_plain_line(0, line);
         selected = (ui_state != UI_PAGE_SELECT && ui_param == 0);
-        sprintf(line, "SPD:%6.0f", (double)g_target_speed);
+        sprintf(line, "SPD:%6.0f",
+                (double)(Race_Mode_ParametersLocked() ?
+                    Race_Mode_GetRunSpeed() : g_target_speed));
         ui_line(1, selected, line);
         selected = (ui_state != UI_PAGE_SELECT && ui_param == 1);
         sprintf(line, "KP:%+.4f", (double)g_motor_Kp);
@@ -322,7 +337,12 @@ void Knob_UI_Show(void)
         break;
 
     case UI_PAGE_TRACE:
-        sprintf(line, "TRACE %s", state_name);
+        if (Race_Mode_ParametersLocked()) {
+            sprintf(line, "M%u TRACE LOCK", (unsigned int)g_race_mode);
+        } else {
+            sprintf(line, "M%u TRACE %s",
+                    (unsigned int)g_race_mode, state_name);
+        }
         ui_plain_line(0, line);
         selected = (ui_state != UI_PAGE_SELECT && ui_param == 0);
         sprintf(line, "ERR:%6d", (int)control_err);
@@ -370,6 +390,7 @@ void Knob_UI_Show(void)
         char reason = 'N';
         if (g_race_log.stop_reason == RACE_STOP_CALIBRATION_PULSE) reason = 'P';
         else if (g_race_log.stop_reason == RACE_STOP_MANUAL) reason = 'M';
+        else if (g_race_log.stop_reason == RACE_STOP_FINISH_LINE) reason = 'L';
 
         sprintf(line, "LOG R%02lu S%u N%u",
                 (unsigned long)g_race_log.run_number,
