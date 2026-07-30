@@ -5,6 +5,7 @@
 #define OLED_UI_REFRESH_US   200000U
 #define OLED_UI_LIVE_US      500000U
 #define OLED_UI_SPEED_LIMIT  30000.0f
+#define MOTOR_RUN_SPEED      100000.0f
 
 extern volatile float g_target_speed;
 extern volatile float g_K_steer;
@@ -12,7 +13,6 @@ extern volatile float g_steer_Kd;
 extern float filter_error;
 extern float alpha;
 extern float current_base_speed;
-extern volatile uint8_t g_trace_uart_fresh;
 
 static int32_t enc_cnt = 0;
 static uint8_t last_button = 0;
@@ -44,7 +44,7 @@ static UiPage ui_drawn_page = UI_PAGE_COUNT;
 static uint8_t ui_param_count(UiPage page)
 {
     switch (page) {
-    case UI_PAGE_MOTOR: return 3U;
+    case UI_PAGE_MOTOR: return 4U;
     case UI_PAGE_TRACE: return 4U;
     case UI_PAGE_GYRO:  return 2U;
     case UI_PAGE_IO:    return 2U;
@@ -90,14 +90,14 @@ static void ui_adjust_value(int8_t delta)
     switch (ui_page) {
     case UI_PAGE_MOTOR:
         if (ui_param == 0) {
-            g_target_speed += (float)delta * 1000.0f;
+            g_target_speed += (float)delta * 4000.0f;
             if (g_target_speed < 0.0f) g_target_speed = 0.0f;
             if (g_target_speed > 200000.0f) g_target_speed = 200000.0f;
         } else if (ui_param == 1) {
             g_motor_Kp += (float)delta * 0.0001f;
             if (g_motor_Kp < 0.0f) g_motor_Kp = 0.0f;
             if (g_motor_Kp > 5.0f) g_motor_Kp = 5.0f;
-        } else {
+        } else if (ui_param == 2) {
             g_motor_Ki += (float)delta * 0.005f;
             if (g_motor_Ki < 0.0f) g_motor_Ki = 0.0f;
             if (g_motor_Ki > 10.0f) g_motor_Ki = 10.0f;
@@ -168,7 +168,10 @@ static void ui_process(int8_t enc, uint8_t button)
         ui_state = UI_PARAM_SELECT;
         ui_param = 0;
     } else if (ui_state == UI_PARAM_SELECT) {
-        if (ui_page == UI_PAGE_GYRO && ui_param == 1) {
+        if (ui_page == UI_PAGE_MOTOR && ui_param == 3) {
+            g_target_speed = (g_target_speed > 1.0f) ?
+                0.0f : MOTOR_RUN_SPEED;
+        } else if (ui_page == UI_PAGE_GYRO && ui_param == 1) {
             ui_calibrate_gyro();
         } else if (ui_page == UI_PAGE_IO && ui_param == 1) {
             led_on = (uint8_t)!led_on;
@@ -254,13 +257,13 @@ void Knob_UI_Show(void)
             for (uint8_t row = 0; row < 4U; row++) {
                 uint8_t ch = (uint8_t)(row * 2U);
                 sprintf(line, "%u:%4u %u:%4u", ch,
-                        (unsigned int)g_trace_uart_latest_x[ch],
+                        (unsigned int)sensors[ch].current_ADC,
                         (unsigned int)(ch + 1U),
-                        (unsigned int)g_trace_uart_latest_x[ch + 1U]);
+                        (unsigned int)sensors[ch + 1U].current_ADC);
                 ui_plain_line((uint8_t)(row + 1U), line);
             }
-            sprintf(line, "ERR:%+3d F:%u", (int)filter_error,
-                    (unsigned int)g_trace_uart_fresh);
+            sprintf(line, "ERR:%+3d A:%u", (int)filter_error,
+                    (unsigned int)ADC_OK());
             ui_plain_line(5, line);
         }
         return;
@@ -292,6 +295,9 @@ void Knob_UI_Show(void)
         selected = (ui_state != UI_PAGE_SELECT && ui_param == 2);
         sprintf(line, "KI:%+.3f", (double)g_motor_Ki);
         ui_line(3, selected, line);
+        selected = (ui_state != UI_PAGE_SELECT && ui_param == 3);
+        ui_line(4, selected,
+                (g_target_speed > 1.0f) ? "RUN:STOP" : "RUN:START");
         break;
 
     case UI_PAGE_TRACE:
@@ -331,13 +337,13 @@ void Knob_UI_Show(void)
         for (uint8_t row = 0; row < 4U; row++) {
             uint8_t ch = (uint8_t)(row * 2U);
             sprintf(line, "%u:%4u %u:%4u", ch,
-                    (unsigned int)g_trace_uart_latest_x[ch],
+                    (unsigned int)sensors[ch].current_ADC,
                     (unsigned int)(ch + 1U),
-                    (unsigned int)g_trace_uart_latest_x[ch + 1U]);
+                    (unsigned int)sensors[ch + 1U].current_ADC);
             ui_plain_line((uint8_t)(row + 1U), line);
         }
-        sprintf(line, "ERR:%+3d F:%u", (int)filter_error,
-                (unsigned int)g_trace_uart_fresh);
+        sprintf(line, "ERR:%+3d A:%u", (int)filter_error,
+                (unsigned int)ADC_OK());
         ui_plain_line(5, line);
         break;
 

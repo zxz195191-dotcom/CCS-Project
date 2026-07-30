@@ -45,7 +45,7 @@ float PID_Compute(PID_TypeDef *pid, float target, float actual,float dt) {
 
     // 3. 积分项累加
     pid->integral += pid->error * dt;
-    
+
     // 积分限幅
     if (pid->integral > pid->integral_max) {
         pid->integral = pid->integral_max;
@@ -54,8 +54,6 @@ float PID_Compute(PID_TypeDef *pid, float target, float actual,float dt) {
     }
 
     // 4. 计算 PID 最终输出
-    // 公式: Out = (P * Error) + (I * Integral) + (D * (Error - LastError))
-    /* P 不除 dt, I 已含 dt, D 除 dt */
     pid->output = (pid->Kp * pid->error) +
                   (pid->Ki * pid->integral) +
                   (pid->Kd * (pid->error - pid->last_error) / dt);
