@@ -12,7 +12,7 @@
 /* ── 全局变量（串口可调）── */
 volatile float g_target_speed = 0.0f;       /* spd 命令 */
 float current_base_speed = 0;
-volatile float g_K_steer      = 15.0f;      /* steer 命令：转向 P */ //10-5
+volatile float g_K_steer      = 13.5f;      /* steer 命令：转向 P */ //10-5
 int32_t control_err = 0;
 volatile uint32_t g_control_dt_us = 0U;
 volatile uint32_t g_control_dt_faults = 0U;
