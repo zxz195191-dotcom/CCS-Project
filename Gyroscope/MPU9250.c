@@ -171,7 +171,7 @@ uint8_t MPU9250_Read_Reg(uint8_t dev_addr, uint8_t reg_addr) {
         return 0xEE; // 最极端的硬件 Bug
     }
 
-    delay_cycles(32000);
+    delay_cycles(80000);
     return data;
 }
 
@@ -204,100 +204,103 @@ uint8_t MPU9250_Write_Reg(uint8_t dev_addr, uint8_t reg_addr, uint8_t data) {
 }
 
 MPU9250_Data_t mpu_data = {0};
+volatile uint8_t g_mpu_gyro_config = 0xFFU;
+float g_mpu_gyro_scale = GYRO_SCALE_250DPS;
 
- void MPU9250_Read_All_Axis(MPU9250_Data_t *dat){    
+static void MPU9250_Update_GyroScale(void)
+{
+    uint8_t config = MPU9250_Read_Reg(MPU_ADDR, 0x1B);
 
-//     uint8_t accel_x_h = MPU9250_Read_Reg(0x68, 0x3B);
-//     uint8_t accel_x_l = MPU9250_Read_Reg(0x68, 0x3C);
-//     uint8_t accel_y_h = MPU9250_Read_Reg(0x68, 0x3D);
-//     uint8_t accel_y_l = MPU9250_Read_Reg(0x68, 0x3E);
-//     uint8_t accel_z_h = MPU9250_Read_Reg(0x68, 0x3F);
-//     uint8_t accel_z_l = MPU9250_Read_Reg(0x68, 0x40);
+    g_mpu_gyro_config = config;
+    if ((config & 0xE0U) != 0U) {
+        /* Read error codes use high bits; default safely to reset range. */
+        g_mpu_gyro_scale = GYRO_SCALE_250DPS;
+        return;
+    }
 
-//     dat->accel_raw[x] = (int16_t)((accel_x_h << 8) | accel_x_l);
-//     dat->accel_raw[y] = (int16_t)((accel_y_h << 8) | accel_y_l);
-//     dat->accel_raw[z] = (int16_t)((accel_z_h << 8) | accel_z_l);
-
-//     for(uint8_t i = 0; i < num ; i++){
-//         dat->accel_g[i] = (float)(dat->accel_raw[i] / 16384.0f);
-//     }
-
-//     uint8_t gyro_x_h = MPU9250_Read_Reg(0x68, 0x43);
-//     uint8_t gyro_x_l = MPU9250_Read_Reg(0x68, 0x44);
-//     uint8_t gyro_y_h = MPU9250_Read_Reg(0x68, 0x45);
-//     uint8_t gyro_y_l = MPU9250_Read_Reg(0x68, 0x46);
-//     uint8_t gyro_z_h = MPU9250_Read_Reg(0x68, 0x47);
-//     uint8_t gyro_z_l = MPU9250_Read_Reg(0x68, 0x48);
-
-//     dat->gyro_raw[x] = (int16_t)((gyro_x_h << 8) | gyro_x_l);
-//     dat->gyro_raw[y] = (int16_t)((gyro_y_h << 8) | gyro_y_l);
-//     dat->gyro_raw[z] = (int16_t)((gyro_z_h << 8) | gyro_z_l);
-
-//     for(uint8_t i = 0; i < num ; i++){
-//         dat->gyro_dps[i] = (float)(dat->gyro_raw[i] / 131.0f);
-//     }
-
- }
-
+    switch ((config >> 3) & 0x03U) {
+    case 0U: g_mpu_gyro_scale = GYRO_SCALE_250DPS;  break;
+    case 1U: g_mpu_gyro_scale = GYRO_SCALE_500DPS;  break;
+    case 2U: g_mpu_gyro_scale = GYRO_SCALE_1000DPS; break;
+    default: g_mpu_gyro_scale = GYRO_SCALE_2000DPS; break;
+    }
+}
 
 
 void MPU9250_Init(void){
-// 唤醒 MPU6500 (如果之前加了 0x80 软复位，保留它)
-    MPU9250_Write_Reg(0x68, 0x6B, 0x01); // Auto PLL
-    delay_cycles(320000);
+    // 1. 唤醒 MPU6500 
+    MPU9250_Write_Reg(0x68, 0x6B, 0x00); 
+    delay_cycles(800000);
 
-    // 【新增：解放陀螺仪封印！】
-    // 0x1B 是 GYRO_CONFIG 寄存器。写入 0x18 (二进制 0001 1000) 代表 ±2000 dps
+
+    // CONFIG (0x1A): 开启 DLPF (数字低通滤波)。
+    MPU9250_Write_Reg(0x68, 0x1A, 0x03);
+
+    // MPU9250_Write_Reg(0x68, 0x1D, 0x03);
+    
+    // SMPLRT_DIV (0x19): 采样率分频。
+    // 公式: Sample Rate = 1kHz / (1 + SMPLRT_DIV)。写入 0x00 代表 1000Hz 极速刷新！
+    MPU9250_Write_Reg(0x68, 0x19, 0x00);
+
+    // GYRO_CONFIG (0x1B): 陀螺仪量程。写入 0x18 代表 ±2000 dps
     MPU9250_Write_Reg(0x68, 0x1B, 0x18); 
-    // 0x1C 是 ACCEL_CONFIG 寄存器。写入 0x00 代表 ±2g (平时最灵敏)
+    
+    // ACCEL_CONFIG (0x1C): 加速度计量程。写入 0x00 代表 ±2g
     MPU9250_Write_Reg(0x68, 0x1C, 0x00);
-    delay_cycles(320000);
+    delay_cycles(800000);
+    // ========================================================
 
-    // 关掉内部 I2C 主机，防止抢控制权
+    // 2. 关掉内部 I2C 主机，防止抢控制权
     MPU9250_Write_Reg(0x68, 0x6A, 0x00);
-    // 开启 Bypass 旁路模式，让 0x0C 暴露出来！
+    
+    // 3. 开启 Bypass 旁路模式，让 0x0C 暴露出来！
     MPU9250_Write_Reg(0x68, 0x37, 0x02);
-    delay_cycles(320000);
+    delay_cycles(800000);
 
-    // 重置 AK8963 (必须先掉电，才能配新模式)
+    // 4. 重置 AK8963 (必须先掉电，才能配新模式)
     MPU9250_Write_Reg(0x0C, 0x0A, 0x00);
-    delay_cycles(320000); 
+    delay_cycles(800000); 
 
-    // 开启 AK8963 16位高精度, 100Hz 连测
+    // 5. 开启 AK8963 16位高精度, 100Hz 连测 
+    // (注意：磁力计的物理极限就是 100Hz，0x16 已经是它的最高形态了)
     MPU9250_Write_Reg(0x0C, 0x0A, 0x16);
-    delay_cycles(320000); 
+    delay_cycles(800000); 
 }
-// void MPU9250_Init(void){
-//     // ==========================================
-//     // 0. 强行软复位 (DEVICE_RESET = 1)
-//     // 强制芯片恢复出厂状态，消除上一次调试残留的 Bypass 状态
-//     // ==========================================
-//     MPU9250_Write_Reg(0x68, 0x6B, 0x80);
-//     delay_cycles(3200000); // 必须给它留足重启时间 (大概 100ms)
 
-//     // ==========================================
-//     // 1. 唤醒并选择最佳时钟源 (Auto PLL)
-//     // 0x01 比 0x00 更好，0x00 是内部20MHz晶振，0x01是自动选择最优陀螺仪时钟
-//     // ==========================================
-//     MPU9250_Write_Reg(0x68, 0x6B, 0x01);
-//     delay_cycles(320000);
+void MPU9250_6Axis_Init(void){
+    // 1. 唤醒 MPU6500 
+    MPU9250_Write_Reg(0x68, 0x6B, 0x00); 
+    delay_cycles(800000);
 
-//     // 2. 关掉内部 I2C 主机，防止抢控制权
-//     MPU9250_Write_Reg(0x68, 0x6A, 0x00);
-//     delay_cycles(320000);
 
-//     // 3. 开启 Bypass 旁路模式，让 0x0C 暴露出来！
-//     MPU9250_Write_Reg(0x68, 0x37, 0x02);
-//     delay_cycles(320000);
+    // CONFIG (0x1A): 开启 DLPF (数字低通滤波)。
+    MPU9250_Write_Reg(0x68, 0x1A, 0x03);
 
-//     // 4. 重置 AK8963 (必须先掉电，才能配新模式)
-//     MPU9250_Write_Reg(0x0C, 0x0A, 0x00);
-//     delay_cycles(320000); 
+    // MPU9250_Write_Reg(0x68, 0x1D, 0x03);
+    
+    // SMPLRT_DIV (0x19): 采样率分频。
+    // 公式: Sample Rate = 1kHz / (1 + SMPLRT_DIV)。写入 0x00 代表 1000Hz 极速刷新！
+    MPU9250_Write_Reg(0x68, 0x19, 0x00);
 
-//     // 5. 开启 AK8963 16位高精度, 100Hz 连测
-//     MPU9250_Write_Reg(0x0C, 0x0A, 0x16);
-//     delay_cycles(320000); 
-// }
+    // GYRO_CONFIG (0x1B): 陀螺仪量程。写入 0x18 代表 ±2000 dps
+    MPU9250_Write_Reg(0x68, 0x1B, 0x18); 
+    
+    // ACCEL_CONFIG (0x1C): 加速度计量程。写入 0x00 代表 ±2g
+    MPU9250_Write_Reg(0x68, 0x1C, 0x00);
+    delay_cycles(800000);
+    // ========================================================
+
+    // 2. 关掉内部 I2C 主机，防止抢控制权
+    MPU9250_Write_Reg(0x68, 0x6A, 0x00);
+    
+    // 3. 关闭 Bypass 旁路模式
+    MPU9250_Write_Reg(0x68, 0x37, 0x00);
+    delay_cycles(800000);
+
+    MPU9250_Update_GyroScale();
+}
+
+
 
 /*整个函数就是为了完成这一串动作。
 START -> 0x68 + Write -> ACK -> 0x75(寄存器地址) -> ACK -> Repeated START -> 0x68 + Read
@@ -353,50 +356,6 @@ uint8_t MPU9250_Read_Len(uint8_t dev_addr, uint8_t reg_addr, uint8_t len, uint8_
 
 
 
-void MPU9250_Read_All_Axis_Plus(MPU9250_Data_t *dat){
-    //Acc6 + temp2 + Gyr6 = 14
-    uint8_t buffer[14];
-
-    //consist reading
-    if(MPU9250_Read_Len(MPU_ADDR, MPU_REG, 14, buffer) != 0) {
-        return;//如果读取失败 还能保留上一次的数据（防止车子抽搐）
-    }
-
-    dat->accel_raw[0] = (int16_t)((buffer[0] << 8) | buffer[1]);
-    dat->accel_raw[1] = (int16_t)((buffer[2] << 8) | buffer[3]);
-    dat->accel_raw[2] = (int16_t)((buffer[4] << 8) | buffer[5]);
-
-    dat->gyro_raw[0] = (int16_t)((buffer[8] << 8) | buffer[9]);
-    dat->gyro_raw[1] = (int16_t)((buffer[10] << 8) | buffer[11]);
-    dat->gyro_raw[2] = (int16_t)((buffer[12] << 8) | buffer[13]);
-
-    for (uint8_t i = 0; i < 3; i++) {//0 x   1 y   2 z
-        dat->accel_g[i]   = (float)dat->accel_raw[i] / 16384.0f;
-        dat->gyro_dps[i]  = (float)dat->gyro_raw[i] / 131.0f;
-    }
-
-
-    // ==========================================
-    // 3. 读取磁力计 (AK8963)
-    // ==========================================
-    // ---------- 读 AK8963 (三轴磁力) ----------
-    uint8_t mag_buffer[8]; 
-    // 必须从 ST1 (0x02) 开始读 8 个字节
-    if (MPU9250_Read_Len(0x0C, 0x02, 8, mag_buffer) == 0) {
-        // 检查 ST1 状态寄存器的最低位 (DRDY: Data Ready)
-        if (mag_buffer[0] & 0x01) { 
-            // 小端模式拼接：低字节在前，高字节在后
-            dat->mag_raw[x] = (int16_t)((mag_buffer[2] << 8) | mag_buffer[1]);
-            dat->mag_raw[y] = (int16_t)((mag_buffer[4] << 8) | mag_buffer[3]);
-            dat->mag_raw[z] = (int16_t)((mag_buffer[6] << 8) | mag_buffer[5]);
-
-            dat->mag_uT[x] = (float)dat->mag_raw[x] * 0.15f;
-            dat->mag_uT[y] = (float)dat->mag_raw[y] * 0.15f;
-            dat->mag_uT[z] = (float)dat->mag_raw[z] * 0.15f;
-        }
-    }
-}
-
 
 
 void MPU9250_Read_All_Axis_Plus_Pro(MPU9250_Data_t *dat) {
@@ -414,9 +373,9 @@ void MPU9250_Read_All_Axis_Plus_Pro(MPU9250_Data_t *dat) {
     dat->accel_g[z] = (int16_t)((buf[4] << 8) | buf[5]) * ACC_SCALE;
 
     // 陀螺仪计算：保留 dps 单位(乘以 GYRO_SCALE)
-    dat->gyro_dps[x] = (int16_t)((buf[8] << 8)  | buf[9])  * GYRO_SCALE;
-    dat->gyro_dps[y] = (int16_t)((buf[10] << 8) | buf[11]) * GYRO_SCALE;
-    dat->gyro_dps[z] = (int16_t)((buf[12] << 8) | buf[13]) * GYRO_SCALE;
+    dat->gyro_dps[x] = (int16_t)((buf[8] << 8)  | buf[9])  * g_mpu_gyro_scale;
+    dat->gyro_dps[y] = (int16_t)((buf[10] << 8) | buf[11]) * g_mpu_gyro_scale;
+    dat->gyro_dps[z] = (int16_t)((buf[12] << 8) | buf[13]) * g_mpu_gyro_scale;
 
     // 读取磁力计 (8字节，小端模式)
     if (MPU9250_Read_Len(MAG_ADDR, 0x02, 8, mag_buf) == 0) {
@@ -429,5 +388,26 @@ void MPU9250_Read_All_Axis_Plus_Pro(MPU9250_Data_t *dat) {
     }
 }
 
+uint8_t MPU9250_Read_6Axis_Plus_Pro(MPU9250_Data_t *dat) {
+    uint8_t buf[14];
+    uint8_t mag_buf[8];
+
+    // 读取六轴 (14字节)
+    if(MPU9250_Read_Len(MPU_ADDR, MPU_REG, 14, buf) != 0) {
+        return 0U;
+    }
+
+    // 加速度计算：直接位运算拼装并乘以 ACC_SCALE
+    dat->accel_g[x] = (int16_t)((buf[0] << 8) | buf[1]) * ACC_SCALE;
+    dat->accel_g[y] = (int16_t)((buf[2] << 8) | buf[3]) * ACC_SCALE;
+    dat->accel_g[z] = (int16_t)((buf[4] << 8) | buf[5]) * ACC_SCALE;
+
+    // 陀螺仪计算：保留 dps 单位(乘以 GYRO_SCALE)
+    dat->gyro_dps[x] = (int16_t)((buf[8] << 8)  | buf[9])  * g_mpu_gyro_scale;
+    dat->gyro_dps[y] = (int16_t)((buf[10] << 8) | buf[11]) * g_mpu_gyro_scale;
+    dat->gyro_dps[z] = (int16_t)((buf[12] << 8) | buf[13]) * g_mpu_gyro_scale;
+
+    return 1U;
+}
 
 

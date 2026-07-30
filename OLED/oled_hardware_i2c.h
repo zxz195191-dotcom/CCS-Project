@@ -13,7 +13,7 @@
 
 #include "ti_msp_dl_config.h"
 
-/* OLED 共用 I2C_0 (PA3=SDA, PA4=SCL) — 别名映射 */
+/* OLED 共用 I2C_0；实际引脚以 empty.syscfg 生成的 PA30/PA29 为准。 */
 #define I2C_OLED_INST                I2C_0_INST
 #define GPIO_I2C_OLED_SDA_PORT       GPIO_I2C_0_SDA_PORT
 #define GPIO_I2C_OLED_SDA_PIN        GPIO_I2C_0_SDA_PIN
@@ -44,6 +44,7 @@ void OLED_ShowFloat(uint8_t x, uint8_t y, int32_t v_q24);  /* Q24 定点, 显示
 void OLED_ShowChinese(uint8_t x,uint8_t y,uint8_t no,uint8_t sizey);
 void OLED_DrawBMP(uint8_t x,uint8_t y,uint8_t sizex, uint8_t sizey,uint8_t BMP[]);
 void OLED_Init(void);
+uint8_t OLED_IsPresent(void);
 void oled_i2c_sda_unlock(void);
 
 /* Gyro开机校准：3s*/

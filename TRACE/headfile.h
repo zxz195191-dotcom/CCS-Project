@@ -4,6 +4,7 @@
 #include "stdint.h"
 #include "stdio.h"
 #include "string.h"
+#include "stdlib.h"
 #include "math.h"
 
 /* SDK 生成 */
@@ -15,6 +16,7 @@
 /* UART */
 #include "../UART/self_uart.h"
 #include "../UART/cmd_parser.h"
+#include "../UART/trace_uart.h"
 
 /* Motor_Knob */
 #include "../Motor_Knob/motor.h"

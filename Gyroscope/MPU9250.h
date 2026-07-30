@@ -10,7 +10,10 @@
 
 // 编译期算好倒数，用乘法代替除法
 #define ACC_SCALE       (1.0f / 16384.0f)
-#define GYRO_SCALE      (1.0f / 16.4f)
+#define GYRO_SCALE_250DPS   (1.0f / 131.0f)
+#define GYRO_SCALE_500DPS   (1.0f / 65.5f)
+#define GYRO_SCALE_1000DPS  (1.0f / 32.8f)
+#define GYRO_SCALE_2000DPS  (1.0f / 16.4f)
 #define MAG_SCALE       0.15f
 #define DEG_TO_RAD      0.0174532925f // 角度转弧度 (PI / 180)
 
@@ -37,15 +40,19 @@ typedef struct {
 
 extern MPU9250_Data_t mpu_data;
 extern float mag_offset[3]; // 给校准函数打印用
+extern volatile uint8_t g_mpu_gyro_config;
+extern float g_mpu_gyro_scale;
 
 // ==========================================
 // 3. 外部函数声明
 // ==========================================
 void MPU9250_Init(void);
+void MPU9250_6Axis_Init(void);
 void Scan_I2C_Devices(void);
 
 // 核心读取函数
 uint8_t MPU9250_Read_Len(uint8_t dev_addr, uint8_t reg_addr, uint8_t len, uint8_t *buf);
-void MPU9250_Read_All_Axis(MPU9250_Data_t *dat);
-void MPU9250_Read_All_Axis_Plus(MPU9250_Data_t *dat);
+//void MPU9250_Read_All_Axis(MPU9250_Data_t *dat);
+//void MPU9250_Read_All_Axis_Plus(MPU9250_Data_t *dat);
 void MPU9250_Read_All_Axis_Plus_Pro(MPU9250_Data_t *dat);
+uint8_t MPU9250_Read_6Axis_Plus_Pro(MPU9250_Data_t *dat);

@@ -1,6 +1,9 @@
 #pragma once
 #include "stdint.h"
 
+extern volatile float g_motor_Kp;
+extern volatile float g_motor_Ki;
+
 /* 脉冲 → 圈数 */
 float Motor_Revolution(int32_t pulses);
 
@@ -33,3 +36,4 @@ extern PID_TypeDef PID_Right;
 // Kp=5.0, Ki=0.5, Kd=0.0, PWM限幅=out_max, 积分限幅=int_max
 void PID_Init(PID_TypeDef *pid, float p, float i, float d, float out_max, float int_max);
 float PID_Compute(PID_TypeDef *pid, float target, float actual,float dt) ;
+float smooth_speed(float current_spd,float wanted_spd);

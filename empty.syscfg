@@ -36,6 +36,27 @@ const ProjectConfig = scripting.addModule("/ti/project_config/ProjectConfig");
 /**
  * Write custom configuration values to the imported modules.
  */
+const divider6       = system.clockTree["PLL_CLK2X_DIV"];
+divider6.divideValue = 4;
+
+const divider7       = system.clockTree["PLL_PDIV"];
+divider7.divideValue = 2;
+
+const divider9       = system.clockTree["UDIV"];
+divider9.divideValue = 2;
+
+const multiplier2         = system.clockTree["PLL_QDIV"];
+multiplier2.multiplyValue = 10;
+
+const mux8       = system.clockTree["HSCLKMUX"];
+mux8.inputSelect = "HSCLKMUX_SYSPLL2X";
+
+const pinFunction3     = system.clockTree["HFCLKEXT"];
+pinFunction3.inputFreq = 40;
+
+const pinFunction4     = system.clockTree["HFXT"];
+pinFunction4.inputFreq = 8;
+
 ADC121.$name                             = "OUT";
 ADC121.adcMem0trig                       = "DL_ADC12_TRIGGER_MODE_TRIGGER_NEXT";
 ADC121.sampClkDiv                        = "DL_ADC12_CLOCK_DIVIDE_8";
@@ -129,13 +150,18 @@ GPIO6.port                          = "PORTA";
 GPIO6.associatedPins[0].$name       = "PA12";
 GPIO6.associatedPins[0].pin.$assign = "PA12";
 
-I2C1.$name                     = "I2C_0";
-I2C1.basicEnableController     = true;
-I2C1.peripheral.$assign        = "I2C1";
-I2C1.peripheral.sdaPin.$assign = "PA30";
-I2C1.peripheral.sclPin.$assign = "PA29";
-I2C1.sdaPinConfig.$name        = "ti_driverlib_gpio_GPIOPinGeneric7";
-I2C1.sclPinConfig.$name        = "ti_driverlib_gpio_GPIOPinGeneric8";
+I2C1.$name                           = "I2C_0";
+I2C1.basicEnableController           = true;
+I2C1.basicControllerStandardBusSpeed = "Fast";
+I2C1.peripheral.$assign              = "I2C1";
+I2C1.peripheral.sdaPin.$assign       = "PA30";
+I2C1.peripheral.sclPin.$assign       = "PA29";
+I2C1.sdaPinConfig.$name              = "ti_driverlib_gpio_GPIOPinGeneric7";
+I2C1.sdaPinConfig.enableConfig       = true;
+I2C1.sdaPinConfig.internalResistor   = "PULL_UP";
+I2C1.sclPinConfig.$name              = "ti_driverlib_gpio_GPIOPinGeneric8";
+I2C1.sclPinConfig.enableConfig       = true;
+I2C1.sclPinConfig.internalResistor   = "PULL_UP";
 
 PWM1.pwmMode                            = "CENTER_ALIGN";
 PWM1.dutyArgs                           = "[50,0,0,0]";
@@ -184,6 +210,7 @@ QEI1.ccp1PinConfig.passedPeripheralType = scripting.forceWrite("Digital");
 QEI1.ccp1PinConfig.$name                = "ti_driverlib_gpio_GPIOPinGeneric6";
 
 SYSCTL.forceDefaultClkConfig = true;
+SYSCTL.clockTreeEn           = true;
 
 UART1.$name                            = "TRACE_UART";
 UART1.enableFIFO                       = true;
@@ -236,6 +263,5 @@ GPIO4.associatedPins[2].pin.$suggestSolution = "PB13";
 QEI1.peripheral.$suggestSolution             = "TIMG8";
 QEI1.peripheral.ccp0Pin.$suggestSolution     = "PA1";
 QEI1.peripheral.ccp1Pin.$suggestSolution     = "PA0";
-SYSCTL.peripheral.$suggestSolution           = "SYSCTL";
 UART1.peripheral.$suggestSolution            = "UART1";
 UART2.peripheral.$suggestSolution            = "UART0";

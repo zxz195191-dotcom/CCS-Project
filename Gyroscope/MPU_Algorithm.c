@@ -67,7 +67,7 @@ void Mag_Calibration(void) {
             uart_transmit(tx_buf);
         }
         // 延时约 10ms，总耗时 10 秒
-        delay_cycles(320000); 
+        delay_cycles(800000); 
     }
 
     // 计算圆心坐标
@@ -90,8 +90,8 @@ const float MAG_OFFSET_Z = 88.34f;*/
 
 
 /* ========== 1. 算法参数 ========== */
-volatile float g_Kp = 0.2f;      // 比例增益（与 main.c 同步）
-volatile float g_Ki = 1.3f;      // 积分增益（与 main.c 同步）
+volatile float g_imu_Kp = 2.0f;
+volatile float g_imu_Ki = 0.0f;
 
 /* ========== 2. 内部状态与输出 ========== */
 float q0 = 1.0f, q1 = 0.0f, q2 = 0.0f, q3 = 0.0f;   // 四元数
@@ -100,6 +100,8 @@ float exInt = 0.0f, eyInt = 0.0f, ezInt = 0.0f;      // 积分误差累积
 float pitch = 0.0f;   // 俯仰角
 float roll  = 0.0f;   // 横滚角
 float yaw   = 0.0f;   // 航向角
+static float yaw_prev_raw = 0.0f;
+static float yaw_full = 0.0f;
 
 /* ========== 3. 快速反平方根 (已修正) ========== */
 static float invSqrt(float x) {
@@ -160,14 +162,14 @@ void MahonyAHRSupdate(float gx, float gy, float gz,   // 陀螺仪 rad/s
     ez = (ax*vy - ay*vx) + (mx*wy - my*wx);
 
     // 6. PI 补偿（消除陀螺仪漂移）
-    if (g_Ki > 0.0f) {
-        exInt += ex * g_Ki * dt;
-        eyInt += ey * g_Ki * dt;
-        ezInt += ez * g_Ki * dt;
+    if (g_imu_Ki > 0.0f) {
+        exInt += ex * g_imu_Ki * dt;
+        eyInt += ey * g_imu_Ki * dt;
+        ezInt += ez * g_imu_Ki * dt;
     }
-    gx += g_Kp * ex + exInt;
-    gy += g_Kp * ey + eyInt;
-    gz += g_Kp * ez + ezInt;
+    gx += g_imu_Kp * ex + exInt;
+    gy += g_imu_Kp * ey + eyInt;
+    gz += g_imu_Kp * ez + ezInt;
 
     // 7. 用校正后的角速度更新四元数
     gx *= (0.5f * dt);
@@ -208,14 +210,14 @@ void MahonyAHRSupdateIMU(float gx, float gy, float gz,
     ez = (ax*vy - ay*vx);
 
     /* PI 补偿 */
-    if (g_Ki > 0.0f) {
-        exInt += ex * g_Ki * dt;
-        eyInt += ey * g_Ki * dt;
-        ezInt += ez * g_Ki * dt;
+    if (g_imu_Ki > 0.0f) {
+        exInt += ex * g_imu_Ki * dt;
+        eyInt += ey * g_imu_Ki * dt;
+        ezInt += ez * g_imu_Ki * dt;
     }
-    gx += g_Kp * ex + exInt;
-    gy += g_Kp * ey + eyInt;
-    gz += g_Kp * ez + ezInt;
+    gx += g_imu_Kp * ex + exInt;
+    gy += g_imu_Kp * ey + eyInt;
+    gz += g_imu_Kp * ez + ezInt;
 
     /* 四元数更新 */
     gx *= (0.5f * dt);
@@ -235,8 +237,6 @@ void MahonyAHRSupdateIMU(float gx, float gy, float gz,
 
 /* ========== 5. 四元数 -> 欧拉角 (含 Yaw 解缠) ========== */
 void ComputeEulerAngles(void) {
-    static float prev_raw = 0.0f;     /* 上一帧 atan2f 原始值 */
-    static float yaw_full = 0.0f;     /* 解缠后的全量程 yaw */
     float raw_yaw, delta;
 
     /* 四元数数值保护：norm 严重偏离 1.0 → 数据已崩，重置 */
@@ -254,13 +254,29 @@ void ComputeEulerAngles(void) {
     raw_yaw = atan2f(2.0f * (q1 * q2 + q0 * q3),
                      q0*q0 + q1*q1 - q2*q2 - q3*q3) * 57.29578f;
 
-    delta = raw_yaw - prev_raw;
+    delta = raw_yaw - yaw_prev_raw;
     if      (delta >  180.0f) delta -= 360.0f;
     else if (delta < -180.0f) delta += 360.0f;
 
     yaw_full += delta;
-    prev_raw  = raw_yaw;
+    yaw_prev_raw = raw_yaw;
     yaw       = yaw_full;
+}
+
+void IMU_Reset_Attitude(void)
+{
+    q0 = 1.0f;
+    q1 = 0.0f;
+    q2 = 0.0f;
+    q3 = 0.0f;
+    exInt = 0.0f;
+    eyInt = 0.0f;
+    ezInt = 0.0f;
+    pitch = 0.0f;
+    roll = 0.0f;
+    yaw = 0.0f;
+    yaw_prev_raw = 0.0f;
+    yaw_full = 0.0f;
 }
 
 
@@ -293,12 +309,16 @@ float gyro_bias[3] = { 0.0f, 0.0f, 0.0f };  /* dps, 开机校准后更新 */
 
 void Gyro_Calibrate_Bias(uint16_t samples) {
     float sx = 0, sy = 0, sz = 0;
+
+    if (samples == 0U) {
+        return;
+    }
     for (uint16_t i = 0; i < samples; i++) {
         MPU9250_Read_All_Axis_Plus_Pro(&mpu_data);
         sx += mpu_data.gyro_dps[x];
         sy += mpu_data.gyro_dps[y];
         sz += mpu_data.gyro_dps[z];
-        delay_cycles(32000);  /* ~1ms */
+        delay_cycles(80000);  /* ~1ms */
     }
     gyro_bias[x] = sx / (float)samples;
     gyro_bias[y] = sy / (float)samples;

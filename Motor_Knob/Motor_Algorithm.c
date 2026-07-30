@@ -14,6 +14,9 @@ float Motor_SpeedMs(int32_t pulses, float dt_s, float wheel_circumference_m) {
 PID_TypeDef PID_Left;
 PID_TypeDef PID_Right;
 
+volatile float g_motor_Kp = 0.0005f;
+volatile float g_motor_Ki = 0.08f;
+
 void PID_Init(PID_TypeDef *pid, float p, float i, float d, float out_max, float int_max){
     pid->Kp = p;
     pid->Ki = i;
@@ -69,4 +72,23 @@ float PID_Compute(PID_TypeDef *pid, float target, float actual,float dt) {
     }
 
     return pid->output;
+}
+
+float smooth_speed(float current_spd,float wanted_spd){
+
+    float spd_step = wanted_spd * 0.03f;
+
+    if(current_spd < wanted_spd){
+        current_spd += spd_step;
+        if(current_spd > wanted_spd){
+            current_spd = wanted_spd;
+        }
+    }    
+    if(current_spd > wanted_spd){
+        current_spd -= spd_step;
+        if(current_spd < wanted_spd){
+            current_spd = wanted_spd;
+        }
+    }
+    return current_spd;
 }

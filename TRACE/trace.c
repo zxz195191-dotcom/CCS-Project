@@ -1,18 +1,20 @@
 #include "trace.h"
 
 Trace_OUT_t sensors[TRACE_SENSOR_COUNT];
+static int32_t current_error = 0 ; 
+static int32_t last_strong_error = 0 ;
+static bool is_white_bg = true ;
+static bool adc_ok = true ;
+static bool normal_line = false;
+static bool wide_line = false;
+static uint8_t center_frame = 0;//窄线的次数
+uint16_t raw_out_value[TRACE_SENSOR_COUNT] = {0} ;
 
+bool ADC_OK(void){ return adc_ok; }
+bool trace_line_is_valid(void){ return normal_line; }
 
-/*#define TRACE_SENSOR_COUNT 8
-#define TRACE_WAIT_CONVERSION_US 10//分频了24 实际是1.33mhz
-
-typedef struct{
-    uint16_t white_value;
-    uint16_t black_value;
-}Trace_OUT_t;
-*/
-
-
+bool trace_is_white_bg(void) { return is_white_bg; }
+void trace_set_bg(bool white_bg){ is_white_bg = white_bg; }
 
 void trace_init() {
     // 1. 先停用 ADC（拔插头，方便我们改接线）
@@ -29,8 +31,8 @@ void trace_init() {
     sensors[CH1].weight = -40;
     sensors[CH2].weight = -30;
     sensors[CH3].weight = -20;
-    sensors[CH4].weight = -10;
-    sensors[CH5].weight =  10;
+    sensors[CH4].weight = -5;
+    sensors[CH5].weight =  5;
     sensors[CH6].weight =  20;
     sensors[CH7].weight =  30;
     sensors[CH8].weight =  40;
@@ -39,13 +41,11 @@ void trace_init() {
     DL_ADC12_enableConversions(OUT_INST);
 }
 
-
 void debug_once(char character){//->判断程序卡死在哪里了
      DL_UART_Main_transmitDataBlocking(UART1,character);
      DL_UART_Main_transmitDataBlocking(UART1,'\r');
      DL_UART_Main_transmitDataBlocking(UART1,'\n');
 }
-
 
 void CHx(uint8_t channel){
     switch(channel){
@@ -69,81 +69,95 @@ void CHx(uint8_t channel){
     }
 }
 
-
-uint16_t raw_out_value[TRACE_SENSOR_COUNT] = {0};
-
-/*
-    先换通道 去处理其他逻辑 然后读取（给电容充分的时间充电）
-    第一次直接获取数据 存入数组 换通道 函数结束
-    第二次执行函数时间会排到其他逻辑后面
-*/
 void trace_readByADC(){
-        static uint8_t cur_ch = 0;     
+    adc_ok = true;
 
-        //重置adc 防止访问到未定义内存
-        DL_ADC12_disableConversions(OUT_INST);
+    for (uint8_t ch = 0; ch < TRACE_SENSOR_COUNT; ch++) {
+        CHx(ch);
+        delay_cycles(800); // 延时约 10us 等待模拟开关建立时间
+
         DL_ADC12_enableConversions(OUT_INST);
 
         DL_ADC12_clearInterruptStatus(OUT_INST, DL_ADC12_INTERRUPT_MEM0_RESULT_LOADED);
         DL_ADC12_startConversion(OUT_INST);
 
+        uint32_t timeout = 100000;
         //等待转换
-        while ((DL_ADC12_getRawInterruptStatus(OUT_INST, DL_ADC12_INTERRUPT_MEM0_RESULT_LOADED)) == 0) { }
-      
-        //下来的就是转换完成的 但是为什么这里还要clear
+        while ((DL_ADC12_getRawInterruptStatus(OUT_INST, DL_ADC12_INTERRUPT_MEM0_RESULT_LOADED)) == 0) {
+        if (--timeout == 0) {
+            adc_ok = false;
+            // 发生硬件崩溃！ 丢掉数据
+            DL_ADC12_disableConversions(OUT_INST);
+            DL_ADC12_enableConversions(OUT_INST);
+            DL_ADC12_clearInterruptStatus(OUT_INST, DL_ADC12_INTERRUPT_MEM0_RESULT_LOADED);            
+            return; 
+        }
+    }
+        DL_ADC12_disableConversions(OUT_INST);
+    if(timeout > 0){
         DL_ADC12_clearInterruptStatus(OUT_INST, DL_ADC12_INTERRUPT_MEM0_RESULT_LOADED);
-        sensors[cur_ch].current_ADC = DL_ADC12_getMemResult(OUT_INST,DL_ADC12_MEM_IDX_0);
-       
-        //通道0获取到准确数据之后 就轮到下一个channel了
-        cur_ch = (cur_ch+1) % TRACE_SENSOR_COUNT;
-        CHx(cur_ch);
+        sensors[ch].current_ADC = DL_ADC12_getMemResult(OUT_INST,DL_ADC12_MEM_IDX_0);        
+        }
+    }
+}
+
+void trace_readFromUART(const uint16_t values[TRACE_SENSOR_COUNT])
+{
+    uint8_t ch;
+
+    for (ch = 0; ch < TRACE_SENSOR_COUNT; ch++) {
+        sensors[ch].current_ADC = values[ch];
+    }
+    adc_ok = true;
 }
 
 
-// 定义最大可能的 Error 值，用于丢线时极限救车
-#define MAX_TRACE_ERROR 80 
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /*
 加权平均（重心法）
 Error =  \frac{\sum (\text{传感器电压值} \times \text{对应权重})}{\sum \text{传感器电压值}}$$
-(分子是所有通道的加权和，分母是所有通道的电压总和)
+(分子是所有通道的加权和，分母是所有通道的ADC数值总和)
 带阈值自适应
 滞回阈值
 */
 int32_t trace_get_error(Trace_OUT_t *t){
+    bool has_gap = false;
+    wide_line = false;
+    normal_line = false;
+
+    if(!adc_ok){
+        center_frame = 0;
+        normal_line = false;
+        return last_strong_error;
+    }
+
     int32_t numerator = 0;   // 分子（加权和）
     int32_t denominator = 0; // 分母（电压总和）
 
-    static int32_t last_valid_error = 0;
-
     int32_t max_val = 0;
     int32_t min_val = 4095;
-
-    int32_t raw_sum = 0;
     int32_t processed_val[TRACE_SENSOR_COUNT];
 
-    //先判断黑白底
-    for (uint8_t i = 0; i < TRACE_SENSOR_COUNT; i++) {
-        raw_sum += t[i].current_ADC;
-    }
+    for(uint8_t i = 0; i < TRACE_SENSOR_COUNT ; i++){  
+        int32_t raw = (int32_t)t[i].current_ADC;
+        if (raw > 4095) raw = 4095;
 
-    //如果半数以上的传感器都看到白色 那返回来的adc数值会大很多
-    //4095最大 那么8通道 4095*8/2 = 16300
-    bool is_white = (raw_sum > 16300);
-
-    // 提取特征（反相）
-    for(uint8_t i = 0; i < TRACE_SENSOR_COUNT ; i++){
-        if(is_white){//白底
-            //黑线扫描到的数值会比相对背景噪音小 需要“取反”来“提取特征”
-            processed_val[i] = 4095 - t[i].current_ADC;  
+        if(!is_white_bg){
+            // 黑底白线：白线反射强、ADC低，需要反相
+            processed_val[i] = 4095 - raw;
         }else{
-            //黑底 直接可以用
-            processed_val[i] = t[i].current_ADC;
+            // 白底黑线：黑线反射弱、ADC高，直接使用
+            processed_val[i] = raw;
         }
+        if(processed_val[i] > max_val) max_val = processed_val[i];
+        if(processed_val[i] < min_val) min_val = processed_val[i];
+}    
 
-        if(t[i].current_ADC > max_val)  max_val = t[i].current_ADC ;
-        if(t[i].current_ADC < min_val)  min_val = t[i].current_ADC ;
-    }
-
+        //uint8_t temp = 0;
+        int8_t first_active = -1,last_active = -1;//记录两通道的差值
+        int32_t span;// 当前帧有效通道跨度
+        uint8_t active_count = 0;
 
     if((max_val - min_val) < 800){ //说明没有扫到线
         denominator = 0;//若是丢线 则触发救车flag
@@ -156,100 +170,98 @@ int32_t trace_get_error(Trace_OUT_t *t){
         int32_t noise_threshold = min_val + (max_val - min_val) / 3;
         
         for(uint8_t i = 0; i < TRACE_SENSOR_COUNT ; i++){
-
             int32_t tem_val = processed_val[i];
-
             if(tem_val > noise_threshold){//大于底部噪音 那就是真的“特征”
                 tem_val -= noise_threshold;
+//不希望再重复定义一堆变量了 但是这种临时参与运算的用结构以固定会占据固定位置 “浪费 ”？
+//更觉得不应该在主要逻辑没有弄清楚的时候纠结这个
+//我发现别说记录清楚多少个通道了 我可以简单在这里把active++ 但是在哪里归零？ 获取这个数据之后就可以 可这个数据用在什么地方呢  在判断宽窄线之后就能丢 那大概能理解归零 但是又应该怎么记录 0110和0101呢 按位与和移位吗 试试看
+                if(first_active < 0) first_active = i;
+                last_active = i;
+//                temp |= (1u << i);
+                active_count++;
             }else{
                 tem_val = 0;
             }
-
             numerator += tem_val * t[i].weight;
             denominator += tem_val;
         }
 
     }
 
-    //超出赛道
+            //超出赛道
     if(denominator == 0){//回忆 上一刻循迹线的位置（越左边越小（小于零））
-
-        if(last_valid_error > 0){//右边
-            return MAX_TRACE_ERROR;//60
-        }else if(last_valid_error < 0){//左边
-            return -MAX_TRACE_ERROR;
-        }else{//开始就不再线上 随便走走 碰碰运气
-            return 0;
-        }
-        
+        center_frame = 0;
+        normal_line = false;
+        return last_strong_error;    
     }
         //重心计算
-        int32_t Error = numerator / denominator ;
-        //更新记忆
-        last_valid_error = Error;
-        return Error;
-    
+        current_error = numerator / denominator ;
+        uint8_t abs_error = abs(current_error);
+
+        span = last_active - first_active;
+        //如果中间有空洞 0101 active就是2 跨度是三 而0111的active是三 跨度也是三
+        // if(span > (active_count - 1)) has_gap = true;
+        // else if (span = (active_count - 1)) has_gap = false;
+        //01110 ac=3 s=2 = ac -1 ; 01011 ac=3 s=3 > ac-1 (有空洞)
+        has_gap = (active_count > 1) && (span > (active_count - 1));
+/*0110：count=2 span=1 → 窄线
+  0101：count=2 span=2 → 有空洞，模糊
+  0111：count=3 span=2 → 宽线
+  1111：count=4 span=3 → 宽线*/
+        wide_line = (active_count >= 3) || has_gap;
+     
+        normal_line = !wide_line;
+
+    /*
+     * A centered line must override the previous escape direction. Without
+     * this, a wide center pattern keeps returning the last +/-14 error and
+     * only changes sign after the line has already crossed the center.
+     */
+    if (abs_error <= 8U) {
+        if (center_frame < 3U) center_frame++;
+        if (center_frame >= 3U) last_strong_error = 0;
+        normal_line = true;
+        return current_error;
+    }
+
+//普通 有效的窄线 返回current
+//宽线 当前方向不可靠 返回strong
+//丢线 返回strong
+//不要把刷新数值和条件返回一起写 容易乱
+//刷新
+    if(abs_error >= 14){//如果强方向
+
+        last_strong_error = current_error;
+        center_frame = 0;
+
+    }else{
+        center_frame = 0;
+    }
+
+//返回
+/*   当前情况          返回值
+  ━━━━━━━━━━━━━━━━  ━━━━━━━━━━━━━━━━━━━
+   ADC失败           last_strong_error
+  ────────────────  ───────────────────
+   丢线              last_strong_error
+  ────────────────  ───────────────────
+   宽线、小误差      last_strong_error
+  ────────────────  ───────────────────
+   宽线、强方向      current_error
+  ────────────────  ───────────────────
+   窄线、强方向      current_error
+  ────────────────  ───────────────────
+   窄线、中等误差    current_error
+  ────────────────  ───────────────────
+   窄线、中心误差    current_error
+*/
+    if(wide_line && abs_error < 14 && last_strong_error != 0){
+        return last_strong_error;
+    }else{
+        return current_error;
+    }
+
+
+//不能无脑返回strong 也不能直接让current 直接返回 那这不是一定会有警告吗
 }
-
-/*### 一、整体实现原理
-这套代码是**模拟多路开关 + 单ADC轮询采样 + 重心法（加权平均）**的模拟量循迹方案，核心是通过反射光强的连续分布计算赛道位置，而非简单的黑白二值判断。
-
-#### 1. 硬件与通道切换
-- 8路红外反射传感器通过**3位地址线控制的模拟多路开关（典型如CD4051）**共用1路ADC输入，节省硬件ADC通道。
-- `CHx(channel)` 是模拟开关的地址译码函数：通过 `AD0/AD1/AD2` 三个IO的高低电平组合，选通8路中的某一路接入ADC。
-
-#### 2. 采样逻辑：流水线式轮询
-`trace_readByADC()` 采用“读当前通道 → 预切下一通道”的流水线设计，把模拟开关切换后的RC充电稳定时间“隐藏”在其他业务逻辑中，不浪费CPU。
-
-单次调用的执行流程：
-1. 复位ADC、清除转换完成中断标志，软件触发一次ADC转换。
-2. 阻塞等待转换完成，读取结果存入 `sensors[cur_ch].current_ADC`。
-3. 通道号自增并取模，调用 `CHx()` 切换到下一路传感器。
-4. 下一次调用该函数时，下一路传感器已经经过了充足的稳定时间，可直接采样到稳定值。
-
-#### 3. 偏差计算：重心法
-`trace_get_error()` 是循迹的核心算法，通过加权平均计算黑线的位置偏差，是模拟循迹的标准方案。
-
-对应公式与代码逻辑：
-- **分子**：每个传感器的ADC值 × 对应权重（位置系数），全部求和
-- **分母**：所有有效传感器的ADC值求和
-- **偏差 Error = 分子 / 分母**
-
-权重设计为左右对称：`-40, -30, -20, -10, 10, 20, 30, 40`。黑线在中间时左右加权抵消，Error≈0；黑线偏左Error为负，偏右为正，数值大小对应偏离程度。
-
-额外的工程处理：
-- **死区过滤**：ADC值小于500直接置0，滤除传感器底噪和微弱杂散光。
-- **分母保护**：所有通道值均为0时（完全脱离赛道）直接返回0，避免除0异常。
-
----
-
-### 二、环境光抗干扰能力分析
-#### 1. 相比二值循迹，抗光性确实更强
-你的判断方向是对的：它依赖的是**反射光的相对分布（对比度）**，而非绝对的黑白阈值，因此对环境光的整体变化有天然鲁棒性。
-
-环境光整体变强/变弱时，所有传感器的接收光强会同步抬升或同步下降，但“白色反射值与黑色反射值的比例关系”基本不变。重心法计算的是相对分布，最终偏差结果受整体光强变化的影响很小；而传统二值循迹用固定阈值判黑白，环境光一变就容易大面积误判。
-
-#### 2. 并非完全不受灯光影响，存在明显局限
-当前代码的抗光能力是有限的，主要短板有三点：
-1. **未做黑白标定与归一化**
-   结构体中预留了 `white_value` 和 `black_value` 字段，但代码完全没有使用。理想做法是先标定纯白、纯黑下的ADC基准值，将原始值归一化到0~1区间：
-   ```
-   归一化值 = (current_ADC - black_value) / (white_value - black_value)
-   ```
-   归一化后的值只反映“相对黑白程度”，与环境光绝对强度无关，抗光能力会大幅提升。当前直接用原始ADC值计算，环境光大幅漂移时仍会影响死区和权重比例。
-
-2. **死区为固定阈值**
-   500的固定阈值在暗光环境下，可能把白色路面的反射值也过滤掉，导致分母为0、误判脱线；在强光环境下，黑色赛道反射值也会偏高，死区失效，底噪会干扰计算。
-
-3. **无法抵消单侧强光**
-   如果场地有定向侧光，会导致某一侧传感器基线整体偏高，相当于引入固定偏移，重心计算结果会出现系统性偏差。
-
----
-
-### 三、进一步提升抗光性的优化方向
-如果要适配不同灯光环境，可在现有代码基础上改进：
-1. 增加标定流程：上电或按键触发时，记录纯白路面和纯黑赛道的ADC值，计算偏差前先做归一化。
-2. 将固定死区改为相对死区（如按最大值的百分比过滤），适配不同光强下的底噪水平。
-3. 硬件层面可增加红外发射管的载波调制（如38KHz），从物理层面滤除环境可见光，这是最彻底的抗光方案。
-
-需要我帮你补充黑白标定与归一化的完整代码吗？*/

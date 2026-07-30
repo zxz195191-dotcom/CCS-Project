@@ -6,6 +6,8 @@
 
 #define I2C_TIMEOUT_MS  (10)
 
+static bool oled_present = false;
+
 //OLED的显存
 //存放格式如下.
 //[0]0 1 2 3 ... 127	
@@ -27,11 +29,55 @@ static int mspm0_i2c_disable(void)
     DL_I2C_reset(I2C_OLED_INST);
     DL_GPIO_initDigitalOutput(GPIO_I2C_OLED_IOMUX_SCL);
     DL_GPIO_initDigitalInputFeatures(GPIO_I2C_OLED_IOMUX_SDA,
-		 DL_GPIO_INVERSION_DISABLE, DL_GPIO_RESISTOR_NONE,
+		 DL_GPIO_INVERSION_DISABLE, DL_GPIO_RESISTOR_PULL_UP,
 		 DL_GPIO_HYSTERESIS_DISABLE, DL_GPIO_WAKEUP_DISABLE);
     DL_GPIO_clearPins(GPIO_I2C_OLED_SCL_PORT, GPIO_I2C_OLED_SCL_PIN);
     DL_GPIO_enableOutput(GPIO_I2C_OLED_SCL_PORT, GPIO_I2C_OLED_SCL_PIN);
     return 0;
+}
+
+static void oled_i2c_abort(void)
+{
+    DL_I2C_resetControllerTransfer(I2C_OLED_INST);
+    DL_I2C_flushControllerTXFIFO(I2C_OLED_INST);
+    DL_I2C_clearInterruptStatus(I2C_OLED_INST, 0xFFFFFFFF);
+}
+
+static bool oled_i2c_probe(void)
+{
+    uint8_t probe = 0x00;
+    uint32_t start = system_millis;
+
+    oled_i2c_abort();
+    DL_I2C_fillControllerTXFIFO(I2C_OLED_INST, &probe, 1);
+    DL_I2C_startControllerTransfer(
+        I2C_OLED_INST, 0x3C, DL_I2C_CONTROLLER_DIRECTION_TX, 1);
+
+    while (1) {
+        uint32_t flags = DL_I2C_getRawInterruptStatus(
+            I2C_OLED_INST, 0xFFFFFFFF);
+
+        if (flags & DL_I2C_INTERRUPT_CONTROLLER_TX_DONE) {
+            oled_i2c_abort();
+            return true;
+        }
+
+        /* 无 OLED 时正常得到 NACK，不能把它当成总线锁死。 */
+        if (flags & DL_I2C_INTERRUPT_CONTROLLER_NACK) {
+            oled_i2c_abort();
+            return false;
+        }
+
+        if ((uint32_t)(system_millis - start) >= I2C_TIMEOUT_MS) {
+            if (DL_I2C_getSDAStatus(I2C_OLED_INST) ==
+                DL_I2C_CONTROLLER_SDA_LOW) {
+                oled_i2c_sda_unlock();
+            } else {
+                oled_i2c_abort();
+            }
+            return false;
+        }
+    }
 }
 
 static int mspm0_i2c_enable(void)
@@ -39,11 +85,11 @@ static int mspm0_i2c_enable(void)
     DL_I2C_reset(I2C_OLED_INST);
     DL_GPIO_initPeripheralInputFunctionFeatures(GPIO_I2C_OLED_IOMUX_SDA,
         GPIO_I2C_OLED_IOMUX_SDA_FUNC, DL_GPIO_INVERSION_DISABLE,
-        DL_GPIO_RESISTOR_NONE, DL_GPIO_HYSTERESIS_DISABLE,
+        DL_GPIO_RESISTOR_PULL_UP, DL_GPIO_HYSTERESIS_DISABLE,
         DL_GPIO_WAKEUP_DISABLE);
     DL_GPIO_initPeripheralInputFunctionFeatures(GPIO_I2C_OLED_IOMUX_SCL,
         GPIO_I2C_OLED_IOMUX_SCL_FUNC, DL_GPIO_INVERSION_DISABLE,
-        DL_GPIO_RESISTOR_NONE, DL_GPIO_HYSTERESIS_DISABLE,
+        DL_GPIO_RESISTOR_PULL_UP, DL_GPIO_HYSTERESIS_DISABLE,
         DL_GPIO_WAKEUP_DISABLE);
     DL_GPIO_enableHiZ(GPIO_I2C_OLED_IOMUX_SDA);
     DL_GPIO_enableHiZ(GPIO_I2C_OLED_IOMUX_SCL);
@@ -105,6 +151,10 @@ void OLED_WR_Byte(uint8_t dat,uint8_t mode)
     unsigned char ptr[2];
     unsigned long start, cur;
 
+    if (!oled_present) {
+        return;
+    }
+
     if(mode)
     {
         ptr[0] = 0x40;
@@ -119,17 +169,44 @@ void OLED_WR_Byte(uint8_t dat,uint8_t mode)
     mspm0_get_clock_ms(&start);
 
     DL_I2C_fillControllerTXFIFO(I2C_OLED_INST, ptr, 2);
-    DL_I2C_clearInterruptStatus(I2C_OLED_INST, DL_I2C_INTERRUPT_CONTROLLER_TX_DONE);
-    while (!(DL_I2C_getControllerStatus(I2C_OLED_INST) & DL_I2C_CONTROLLER_STATUS_IDLE));
+    DL_I2C_clearInterruptStatus(I2C_OLED_INST, 0xFFFFFFFF);
+
+    while (!(DL_I2C_getControllerStatus(I2C_OLED_INST) &
+             DL_I2C_CONTROLLER_STATUS_IDLE)) {
+        mspm0_get_clock_ms(&cur);
+        if ((unsigned long)(cur - start) >= I2C_TIMEOUT_MS) {
+            oled_present = false;
+            oled_i2c_abort();
+            return;
+        }
+    }
+
     DL_I2C_startControllerTransfer(I2C_OLED_INST, 0x3C, DL_I2C_CONTROLLER_DIRECTION_TX, 2);
 
-    while (!DL_I2C_getRawInterruptStatus(I2C_OLED_INST, DL_I2C_INTERRUPT_CONTROLLER_TX_DONE))
-    {
+    while (1) {
+        uint32_t flags = DL_I2C_getRawInterruptStatus(
+            I2C_OLED_INST, 0xFFFFFFFF);
+
+        if (flags & DL_I2C_INTERRUPT_CONTROLLER_TX_DONE) {
+            return;
+        }
+
+        if (flags & DL_I2C_INTERRUPT_CONTROLLER_NACK) {
+            oled_present = false;
+            oled_i2c_abort();
+            return;
+        }
+
         mspm0_get_clock_ms(&cur);
-        if(cur >= (start + I2C_TIMEOUT_MS))
-        {
-            oled_i2c_sda_unlock();
-            break;
+        if ((unsigned long)(cur - start) >= I2C_TIMEOUT_MS) {
+            oled_present = false;
+            if (DL_I2C_getSDAStatus(I2C_OLED_INST) ==
+                DL_I2C_CONTROLLER_SDA_LOW) {
+                oled_i2c_sda_unlock();
+            } else {
+                oled_i2c_abort();
+            }
+            return;
         }
     }
 }
@@ -310,10 +387,30 @@ void OLED_DrawBMP(uint8_t x,uint8_t y,uint8_t sizex, uint8_t sizey,uint8_t BMP[]
 //初始化SSD1306					    
 void OLED_Init(void)
 {
-    if(DL_I2C_getSDAStatus(I2C_OLED_INST) == DL_I2C_CONTROLLER_SDA_LOW)
-        oled_i2c_sda_unlock();
+    oled_present = false;
 
-    delay_ms(200);
+    /* Some SSD1306 modules become ready later than the MCU and MPU9250. */
+    delay_ms(150);
+    mspm0_i2c_enable();
+
+    for (uint8_t attempt = 0; attempt < 5U; attempt++) {
+        if (DL_I2C_getSDAStatus(I2C_OLED_INST) ==
+            DL_I2C_CONTROLLER_SDA_LOW) {
+            oled_i2c_sda_unlock();
+        }
+
+        if (oled_i2c_probe()) {
+            oled_present = true;
+            break;
+        }
+
+        delay_ms(50);
+        mspm0_i2c_enable();
+    }
+
+    if (!oled_present) return;
+
+    delay_ms(50);
 
     OLED_WR_Byte(0xAE,OLED_CMD);//--turn off oled panel
     OLED_WR_Byte(0x00,OLED_CMD);//---set low column address
@@ -344,6 +441,11 @@ void OLED_Init(void)
     OLED_WR_Byte(0xA6,OLED_CMD);// Disable Inverse Display On (0xa6/a7) 
     OLED_Clear();
     OLED_WR_Byte(0xAF,OLED_CMD); /*display ON*/
+}
+
+uint8_t OLED_IsPresent(void)
+{
+    return oled_present ? 1U : 0U;
 }
 
 /* ================================================================
@@ -392,6 +494,7 @@ typedef enum {
 
 /* ── 编码器：正交格雷码解码 ── */
 static uint8_t enc_last_ab = 0;
+static int8_t  enc_accum = 0;
 
 void OLED_Encoder_Init(void)
 {
@@ -405,55 +508,63 @@ int8_t OLED_Encoder_Read(void)
     uint8_t a  = DL_GPIO_readPins(GPIOB, Encoder_Knob__A_PIN) ? 1 : 0;
     uint8_t b  = DL_GPIO_readPins(GPIOB, Encoder_Knob__B_PIN) ? 1 : 0;
     uint8_t ab = (a << 1) | b;
+    int8_t  step = 0;
     int8_t  ret = 0;
 
     if (ab != enc_last_ab) {
         uint8_t old = enc_last_ab;
         enc_last_ab = ab;
         if ((old == 0 && ab == 1) || (old == 1 && ab == 3) ||
-            (old == 3 && ab == 2) || (old == 2 && ab == 0)) ret = 1;
+            (old == 3 && ab == 2) || (old == 2 && ab == 0)) step = 1;
         else if ((old == 0 && ab == 2) || (old == 2 && ab == 3) ||
-                 (old == 3 && ab == 1) || (old == 1 && ab == 0)) ret = -1;
+                 (old == 3 && ab == 1) || (old == 1 && ab == 0)) step = -1;
+
+        if (step != 0) {
+            enc_accum += step;
+            if (enc_accum >= 4)  { ret = 1;  enc_accum = 0; }
+            if (enc_accum <= -4) { ret = -1; enc_accum = 0; }
+        }
     }
     return ret;
 }
 
 /* ── 按钮状态机 ── */
-#define BTN_TICK_MS  4
-#define BTN_LONG_MS  800
-#define BTN_DBL_MS   350
+#define BTN_DEBOUNCE_MS  20U
+#define BTN_LONG_MS      800U
 
 ButtonEvent OLED_Button_Read(void)
 {
-    static uint16_t press_ticks = 0;
-    static uint16_t wait_ticks  = 0;
-    static uint8_t  state       = 0;
-    static uint8_t  long_fired  = 0;
+    static uint8_t raw_last = 1;
+    static uint8_t stable = 1;
+    static uint8_t long_fired = 0;
+    static uint32_t raw_changed_us = 0;
+    static uint32_t pressed_us = 0;
+    uint32_t now_us = Micros();
     uint8_t now = DL_GPIO_readPins(GPIOB, Encoder_Knob__Button_PIN) ? 1 : 0;
 
-    switch (state) {
-    case 0: /* IDLE */
-        if (now == 0) { press_ticks = 1; long_fired = 0; state = 1; }
-        break;
-    case 1: /* PRESS */
-        if (now == 0) {
-            press_ticks++;
-            if (press_ticks >= BTN_LONG_MS / BTN_TICK_MS && !long_fired)
-                { long_fired = 1; state = 0; return BTN_LONG; }
-        } else {
-            if (press_ticks >= 2) { wait_ticks = 1; state = 2; }
-            else state = 0;
-        }
-        break;
-    case 2: /* WAIT_CLICK */
-        if (now == 0) { press_ticks = 1; state = 3; }
-        else { wait_ticks++; if (wait_ticks >= BTN_DBL_MS / BTN_TICK_MS)
-               { state = 0; return BTN_CLICK; } }
-        break;
-    case 3: /* WAIT_DBL */
-        if (now == 1) { state = 0; return BTN_DOUBLE; }
-        break;
+    if (now != raw_last) {
+        raw_last = now;
+        raw_changed_us = now_us;
+        return BTN_NONE;
     }
+
+    if (now != stable &&
+        (uint32_t)(now_us - raw_changed_us) >= BTN_DEBOUNCE_MS * 1000U) {
+        stable = now;
+        if (stable == 0) {
+            pressed_us = now_us;
+            long_fired = 0;
+        } else if (!long_fired) {
+            return BTN_CLICK;
+        }
+    }
+
+    if (stable == 0 && !long_fired &&
+        (uint32_t)(now_us - pressed_us) >= BTN_LONG_MS * 1000U) {
+        long_fired = 1;
+        return BTN_LONG;
+    }
+
     return BTN_NONE;
 }
 
