@@ -3,21 +3,33 @@
 #include "TRACE/trace.h"
 #include "headfile.h"
 #include "cmd_parser.h"
+#include "race_log.h"
 
 #define CONTROL_PERIOD_US 20000U
 #define CONTROL_DT_MAX_US 50000U
-#define FINISH_ARM_TIME_US 16000000U
-#define FINISH_ARM_PULSES 1600000U
-#define FINISH_OUTER_RIGHT_MASK (1U << CH8)
-#define FINISH_INNER_RIGHT_MASK \
-    ((1U << CH5) | (1U << CH6) | (1U << CH7))
+#define CALIBRATION_STOP_PULSES 1598000U
+#define FINISH_LOG_START_PULSES 1500000U
+#define FINISH_MASK_STABLE_CYCLES 2U
+#define RACE_STOP_STABLE_CYCLES 10U
+#define RACE_STOP_DELTA_LIMIT 2U
+#define TURN_ENTRY_RAW_DPS 5.0f
+#define TURN_ENTRY_CONFIRM_DPS 12.0f
+#define TURN_ENTRY_CONFIRM_DEG 5.0f
+#define TURN_EXIT_CANDIDATE_DPS 12.0f
+#define TURN_EXIT_STABLE_DPS 6.0f
+#define TURN_EXIT_CONFIRM_DEG 135.0f
+#define TURN_EXIT_STABLE_CYCLES 8U
+#define B_SEARCH_START_PULSES 250000U
+#define C_SEARCH_START_PULSES 650000U
+#define D_SEARCH_START_PULSES 1000000U
+#define A_SEARCH_START_PULSES 1450000U
 
 //345164 电机最快速速度
 
 /* ── 全局变量（串口可调）── */
 volatile float g_target_speed = 0.0f;       /* spd 命令 */
 float current_base_speed = 0;
-volatile float g_K_steer      = 13.5f;      /* steer 命令：转向 P */ //10-5
+volatile float g_K_steer      = 8.0f;      /* steer 命令：转向 P */ //10-5
 int32_t control_err = 0;
 volatile uint32_t g_control_dt_us = 0U;
 volatile uint32_t g_control_dt_faults = 0U;
@@ -25,45 +37,316 @@ volatile uint32_t g_imu_read_failures = 0U;
 volatile uint32_t g_lap_time_ms = 0U;
 volatile uint32_t g_lap_pulses = 0U;
 volatile uint8_t g_lap_recording = 0U;
-volatile uint8_t g_finish_armed_seen = 0U;
-volatile uint8_t g_finish_max_count = 0U;
-volatile uint8_t g_finish_best_mask = 0U;
-volatile uint8_t g_finish_last_candidate_mask = 0U;
+RaceRunLog g_race_log;
+volatile uint8_t g_race_log_ready = 0U;
+volatile uint8_t g_race_logging_active = 0U;
 
 static uint32_t lap_start_us = 0U;
 static uint32_t lap_pulse_sum = 0U;
+static uint32_t race_run_counter = 0U;
+static uint8_t race_stop_pending = 0U;
+static uint8_t race_stop_stable_count = 0U;
+static float race_relative_yaw_deg = 0.0f;
+static float race_filtered_gyro_dps = 0.0f;
+static float race_turn_start_yaw_deg = 0.0f;
+static int8_t race_turn_direction = 0;
+static uint8_t race_entry_candidate = 0U;
+static uint8_t race_entry_release_count = 0U;
+static int8_t race_entry_direction = 0;
+static uint32_t race_entry_candidate_pulse = 0U;
+static float race_entry_candidate_yaw_deg = 0.0f;
+static uint8_t race_exit_candidate = 0U;
+static uint8_t race_exit_stable_count = 0U;
+static uint32_t race_exit_candidate_pulse = 0U;
+static uint8_t race_mask_candidate = 0U;
+static uint8_t race_mask_candidate_count = 0U;
+static uint32_t race_mask_candidate_pulse = 0U;
+static uint8_t race_last_logged_mask = 0U;
+static uint8_t race_mask_log_started = 0U;
 
-static void lap_record_finish(uint32_t now_us)
+static uint32_t race_current_pulses(void)
 {
-    g_lap_pulses = lap_pulse_sum / 2U;
-    g_lap_time_ms = (uint32_t)(now_us - lap_start_us) / 1000U;
+    return lap_pulse_sum / 2U;
+}
+
+static float race_absf(float value)
+{
+    return (value < 0.0f) ? -value : value;
+}
+
+static int8_t race_signf(float value)
+{
+    return (value < 0.0f) ? -1 : 1;
+}
+
+static void race_log_start(uint32_t now_us)
+{
+    race_run_counter++;
+    g_race_log = (RaceRunLog){0};
+    g_race_log.run_number = race_run_counter;
+    g_race_log.phase = RACE_PHASE_AB;
+    g_race_log_ready = 0U;
+    g_race_logging_active = 1U;
+    g_lap_recording = 1U;
+
+    lap_start_us = now_us;
+    lap_pulse_sum = 0U;
+    g_lap_time_ms = 0U;
+    g_lap_pulses = 0U;
+    race_stop_pending = 0U;
+    race_stop_stable_count = 0U;
+    race_relative_yaw_deg = 0.0f;
+    race_filtered_gyro_dps = 0.0f;
+    race_turn_start_yaw_deg = 0.0f;
+    race_turn_direction = 0;
+    race_entry_candidate = 0U;
+    race_entry_release_count = 0U;
+    race_entry_direction = 0;
+    race_entry_candidate_pulse = 0U;
+    race_entry_candidate_yaw_deg = 0.0f;
+    race_exit_candidate = 0U;
+    race_exit_stable_count = 0U;
+    race_exit_candidate_pulse = 0U;
+    race_mask_candidate = 0U;
+    race_mask_candidate_count = 0U;
+    race_mask_candidate_pulse = 0U;
+    race_last_logged_mask = 0U;
+    race_mask_log_started = 0U;
+}
+
+static void race_request_stop(uint32_t now_us, RaceStopReason reason)
+{
+    if (!g_lap_recording || race_stop_pending) return;
+
+    g_race_log.stop_command_pulse = race_current_pulses();
+    g_race_log.stop_command_time_ms =
+        (uint32_t)(now_us - lap_start_us) / 1000U;
+    g_race_log.stop_reason = (uint8_t)reason;
+    g_lap_pulses = g_race_log.stop_command_pulse;
+    g_lap_time_ms = g_race_log.stop_command_time_ms;
     g_lap_recording = 0U;
+    race_stop_pending = 1U;
+    race_stop_stable_count = 0U;
+}
+
+static void race_log_complete(uint32_t now_us)
+{
+    g_race_log.final_stop_pulse = race_current_pulses();
+    g_race_log.final_stop_time_ms =
+        (uint32_t)(now_us - lap_start_us) / 1000U;
+    g_race_log.final_relative_yaw_x10 =
+        (int16_t)(race_relative_yaw_deg * 10.0f);
+    g_race_logging_active = 0U;
+    g_race_log_ready = 1U;
+    race_stop_pending = 0U;
+    Knob_UI_OpenRaceLog();
+}
+
+static void race_finish_mask_commit(uint32_t pulse, uint8_t mask)
+{
+    if (mask == race_last_logged_mask &&
+        g_race_log.finish_event_count > 0U) return;
+
+    race_last_logged_mask = mask;
+    if (g_race_log.finish_event_count < RACE_FINISH_EVENT_CAPACITY) {
+        uint8_t index = g_race_log.finish_event_count;
+        g_race_log.finish_events[index].pulse = pulse;
+        g_race_log.finish_events[index].mask = mask;
+        g_race_log.finish_event_count++;
+    } else {
+        g_race_log.finish_event_overflow = 1U;
+    }
+
+    if (g_race_log.first_finish_candidate_pulse == 0U &&
+        (mask & (uint8_t)(1U << CH8)) != 0U &&
+        (mask & (uint8_t)~(1U << CH8)) != 0U) {
+        g_race_log.first_finish_candidate_pulse = pulse;
+        g_race_log.first_finish_candidate_mask = mask;
+    }
+}
+
+static void race_log_finish_mask(uint8_t mask)
+{
+    uint32_t pulse = race_current_pulses();
+    if (pulse < FINISH_LOG_START_PULSES) return;
+
+    if (!race_mask_log_started || mask != race_mask_candidate) {
+        race_mask_log_started = 1U;
+        race_mask_candidate = mask;
+        race_mask_candidate_count = 1U;
+        race_mask_candidate_pulse = pulse;
+        return;
+    }
+
+    if (race_mask_candidate_count < FINISH_MASK_STABLE_CYCLES) {
+        race_mask_candidate_count++;
+        if (race_mask_candidate_count == FINISH_MASK_STABLE_CYCLES) {
+            race_finish_mask_commit(race_mask_candidate_pulse,
+                                    race_mask_candidate);
+        }
+    }
+}
+
+static void race_reset_entry_candidate(void)
+{
+    race_entry_candidate = 0U;
+    race_entry_release_count = 0U;
+}
+
+static void race_update_straight_entry(uint32_t pulse, float raw_rate_dps)
+{
+    uint32_t search_start = (g_race_log.phase == RACE_PHASE_AB) ?
+        B_SEARCH_START_PULSES : D_SEARCH_START_PULSES;
+    if (pulse < search_start) {
+        race_reset_entry_candidate();
+        return;
+    }
+
+    int8_t direction = race_signf(raw_rate_dps);
+    uint8_t direction_allowed = (race_turn_direction == 0) ||
+        (direction == race_turn_direction);
+
+    if (race_absf(raw_rate_dps) >= TURN_ENTRY_RAW_DPS && direction_allowed) {
+        if (!race_entry_candidate || direction != race_entry_direction) {
+            race_entry_candidate = 1U;
+            race_entry_release_count = 0U;
+            race_entry_direction = direction;
+            race_entry_candidate_pulse = pulse;
+            race_entry_candidate_yaw_deg = race_relative_yaw_deg;
+        } else {
+            race_entry_release_count = 0U;
+        }
+    } else if (race_entry_candidate) {
+        if (race_absf(raw_rate_dps) < 3.0f || direction != race_entry_direction) {
+            if (++race_entry_release_count >= 3U) {
+                race_reset_entry_candidate();
+            }
+        }
+    }
+
+    if (race_entry_candidate &&
+        race_absf(race_filtered_gyro_dps) >= TURN_ENTRY_CONFIRM_DPS) {
+        float confirmed_angle =
+            (race_relative_yaw_deg - race_entry_candidate_yaw_deg) *
+            (float)race_entry_direction;
+        if (confirmed_angle >= TURN_ENTRY_CONFIRM_DEG) {
+            race_turn_direction = race_entry_direction;
+            race_turn_start_yaw_deg = race_entry_candidate_yaw_deg;
+            race_exit_candidate = 0U;
+            race_exit_stable_count = 0U;
+
+            if (g_race_log.phase == RACE_PHASE_AB) {
+                g_race_log.pulse_b = race_entry_candidate_pulse;
+                g_race_log.phase = RACE_PHASE_BC;
+            } else if (g_race_log.phase == RACE_PHASE_CD) {
+                g_race_log.pulse_d = race_entry_candidate_pulse;
+                g_race_log.phase = RACE_PHASE_DA;
+            }
+            race_reset_entry_candidate();
+        }
+    }
+}
+
+static void race_update_curve_exit(uint32_t pulse)
+{
+    uint32_t search_start = (g_race_log.phase == RACE_PHASE_BC) ?
+        C_SEARCH_START_PULSES : A_SEARCH_START_PULSES;
+    float curve_angle = race_absf(race_relative_yaw_deg - race_turn_start_yaw_deg);
+
+    if (pulse < search_start || curve_angle < TURN_EXIT_CONFIRM_DEG) {
+        race_exit_candidate = 0U;
+        race_exit_stable_count = 0U;
+        return;
+    }
+
+    if (race_absf(race_filtered_gyro_dps) <= TURN_EXIT_CANDIDATE_DPS) {
+        if (!race_exit_candidate) {
+            race_exit_candidate = 1U;
+            race_exit_candidate_pulse = pulse;
+            race_exit_stable_count = 0U;
+        }
+
+        if (race_absf(race_filtered_gyro_dps) <= TURN_EXIT_STABLE_DPS) {
+            if (race_exit_stable_count < TURN_EXIT_STABLE_CYCLES) {
+                race_exit_stable_count++;
+            }
+        } else {
+            race_exit_stable_count = 0U;
+        }
+    } else {
+        race_exit_candidate = 0U;
+        race_exit_stable_count = 0U;
+    }
+
+    if (race_exit_candidate &&
+        race_exit_stable_count >= TURN_EXIT_STABLE_CYCLES) {
+        if (g_race_log.phase == RACE_PHASE_BC) {
+            g_race_log.pulse_c = race_exit_candidate_pulse;
+            g_race_log.phase = RACE_PHASE_CD;
+        } else if (g_race_log.phase == RACE_PHASE_DA) {
+            g_race_log.pulse_a_curve_exit = race_exit_candidate_pulse;
+            g_race_log.phase = RACE_PHASE_AFTER_A;
+        }
+        race_exit_candidate = 0U;
+        race_exit_stable_count = 0U;
+    }
+}
+
+static void race_log_navigation(float corrected_gyro_dps, float dt)
+{
+    if (!g_race_logging_active) return;
+
+    uint32_t pulse = race_current_pulses();
+    race_relative_yaw_deg += corrected_gyro_dps * dt;
+    race_filtered_gyro_dps +=
+        0.2f * (corrected_gyro_dps - race_filtered_gyro_dps);
+
+    float abs_gyro = race_absf(corrected_gyro_dps);
+    uint32_t abs_gyro_x10 = (uint32_t)(abs_gyro * 10.0f);
+    if (abs_gyro_x10 > 65535U) abs_gyro_x10 = 65535U;
+    if (abs_gyro_x10 > g_race_log.max_abs_gyro_dps_x10) {
+        g_race_log.max_abs_gyro_dps_x10 = (uint16_t)abs_gyro_x10;
+    }
+
+    if (g_race_log.phase == RACE_PHASE_AB ||
+        g_race_log.phase == RACE_PHASE_CD) {
+        race_update_straight_entry(pulse, corrected_gyro_dps);
+    } else if (g_race_log.phase == RACE_PHASE_BC ||
+               g_race_log.phase == RACE_PHASE_DA) {
+        race_update_curve_exit(pulse);
+    }
 }
 
 static void lap_record_update(uint32_t now_us, int32_t dL, int32_t dR)
 {
     bool run_requested = g_target_speed > 1.0f;
 
-    if (run_requested && !g_lap_recording) {
-        g_lap_recording = 1U;
-        lap_start_us = now_us;
-        lap_pulse_sum = 0U;
-        g_lap_time_ms = 0U;
-        g_lap_pulses = 0U;
-        g_finish_armed_seen = 0U;
-        g_finish_max_count = 0U;
-        g_finish_best_mask = 0U;
-        g_finish_last_candidate_mask = 0U;
+    if (run_requested && !g_race_logging_active) {
+        race_log_start(now_us);
     }
 
-    if (g_lap_recording) {
+    if (g_race_logging_active) {
         uint32_t left = (dL < 0) ? (uint32_t)(-dL) : (uint32_t)dL;
         uint32_t right = (dR < 0) ? (uint32_t)(-dR) : (uint32_t)dR;
 
         lap_pulse_sum += left + right;
 
-        if (!run_requested) {
-            lap_record_finish(now_us);
+        if (g_lap_recording && !run_requested) {
+            race_request_stop(now_us, RACE_STOP_MANUAL);
+        }
+
+        if (race_stop_pending) {
+            if ((left + right) <= RACE_STOP_DELTA_LIMIT) {
+                if (race_stop_stable_count < RACE_STOP_STABLE_CYCLES) {
+                    race_stop_stable_count++;
+                }
+            } else {
+                race_stop_stable_count = 0U;
+            }
+
+            if (race_stop_stable_count >= RACE_STOP_STABLE_CYCLES) {
+                race_log_complete(now_us);
+            }
         }
     }
 }
@@ -130,7 +413,8 @@ int main(void)
             float inv_dt = 1.0f / dt;
             last_pid    = now_us;
 
-            if (MPU9250_Read_6Axis_Plus_Pro(&mpu_data)) {
+            uint8_t imu_ok = MPU9250_Read_6Axis_Plus_Pro(&mpu_data);
+            if (imu_ok) {
                 IMU_Update_Attitude_6Axis(&mpu_data, dt);
                 ComputeEulerAngles();
             } else {
@@ -163,36 +447,18 @@ int main(void)
             Motor_Get_Delta(&dL, &dR);//速度不要/dt
             lap_record_update(now_us, dL, dR);
 
+            if (imu_ok) {
+                race_log_navigation(mpu_data.gyro_dps[z] - gyro_bias[z], dt);
+            }
+            if (g_race_logging_active) {
+                race_log_finish_mask(trace_get_active_mask());
+            }
+
             if (g_lap_recording &&
-                ((uint32_t)(now_us - lap_start_us) >= FINISH_ARM_TIME_US) &&
-                (lap_pulse_sum >= FINISH_ARM_PULSES * 2U)) {
-                uint8_t mask = trace_get_active_mask();
-                uint8_t active_count = 0U;
-
-                g_finish_armed_seen = 1U;
-
-                for (uint8_t i = 0; i < TRACE_SENSOR_COUNT; i++) {
-                    if ((mask & (uint8_t)(1U << i)) != 0U) {
-                        active_count++;
-                    }
-                }
-
-                if (active_count > g_finish_max_count) {
-                    g_finish_max_count = active_count;
-                    g_finish_best_mask = mask;
-                }
-                if (active_count >= 2U) {
-                    g_finish_last_candidate_mask = mask;
-                }
-
-                if ((active_count >= 4U) ||
-                    (((mask & FINISH_OUTER_RIGHT_MASK) != 0U) &&
-                     ((mask & FINISH_INNER_RIGHT_MASK) != 0U))) {
-                    g_target_speed = 0.0f;
-                    current_base_speed = 0.0f;
-                    lap_record_finish(now_us);
-                    Knob_UI_Refresh();
-                }
+                (race_current_pulses() >= CALIBRATION_STOP_PULSES)) {
+                g_target_speed = 0.0f;
+                current_base_speed = 0.0f;
+                race_request_stop(now_us, RACE_STOP_CALIBRATION_PULSE);
             }
 
             float speedL = (float)dL * inv_dt;                   /* 脉冲 */

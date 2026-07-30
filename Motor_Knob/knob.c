@@ -1,4 +1,5 @@
 #include "headfile.h"
+#include "../race_log.h"
 
 #define KNOB_BTN_CLICK       1U
 #define KNOB_BTN_LONG        3U
@@ -13,10 +14,6 @@ extern int32_t control_err;
 extern float current_base_speed;
 extern volatile uint32_t g_lap_time_ms;
 extern volatile uint32_t g_lap_pulses;
-extern volatile uint8_t g_finish_armed_seen;
-extern volatile uint8_t g_finish_max_count;
-extern volatile uint8_t g_finish_best_mask;
-extern volatile uint8_t g_finish_last_candidate_mask;
 
 static int32_t enc_cnt = 0;
 static uint8_t last_button = 0;
@@ -29,6 +26,9 @@ typedef enum {
     UI_PAGE_GYRO,
     UI_PAGE_IO,
     UI_PAGE_RAW,
+    UI_PAGE_RUN_LOG,
+    UI_PAGE_MASK_LOG_1,
+    UI_PAGE_MASK_LOG_2,
     UI_PAGE_COUNT
 } UiPage;
 
@@ -53,6 +53,10 @@ static uint8_t ui_param_count(UiPage page)
     case UI_PAGE_GYRO:  return 2U;
     case UI_PAGE_IO:    return 2U;
     case UI_PAGE_RAW:   return 1U;
+    case UI_PAGE_RUN_LOG:
+    case UI_PAGE_MASK_LOG_1:
+    case UI_PAGE_MASK_LOG_2:
+        return 1U;
     default:            return 1U;
     }
 }
@@ -64,6 +68,14 @@ static void ui_mark_dirty(void)
 
 void Knob_UI_Refresh(void)
 {
+    ui_mark_dirty();
+}
+
+void Knob_UI_OpenRaceLog(void)
+{
+    ui_page = UI_PAGE_RUN_LOG;
+    ui_state = UI_PAGE_SELECT;
+    ui_param = 0;
     ui_mark_dirty();
 }
 
@@ -179,7 +191,10 @@ static void ui_process(int8_t enc, uint8_t button)
             LED_Set(led_on != 0U);
         } else if (!(ui_page == UI_PAGE_TRACE && ui_param == 0) &&
                    !(ui_page == UI_PAGE_GYRO && ui_param == 0) &&
-                   !(ui_page == UI_PAGE_RAW)) {
+                   !(ui_page == UI_PAGE_RAW) &&
+                   !(ui_page == UI_PAGE_RUN_LOG) &&
+                   !(ui_page == UI_PAGE_MASK_LOG_1) &&
+                   !(ui_page == UI_PAGE_MASK_LOG_2)) {
             ui_state = UI_EDIT;
         }
     } else {
@@ -240,6 +255,7 @@ void Knob_UI_Show(void)
     uint32_t elapsed = (uint32_t)(now - ui_last_draw);
 
     /* Never let display traffic disturb the running control loop. */
+    if (g_race_logging_active) return;
     if (fabsf(current_base_speed) > OLED_UI_SPEED_LIMIT) return;
 
     if (!ui_dirty) {
@@ -303,12 +319,6 @@ void Knob_UI_Show(void)
                 (double)g_lap_time_ms / 1000.0,
                 (unsigned long)g_lap_pulses);
         ui_plain_line(5, line);
-        sprintf(line, "A%u C%u B%02X L%02X",
-                (unsigned int)g_finish_armed_seen,
-                (unsigned int)g_finish_max_count,
-                (unsigned int)g_finish_best_mask,
-                (unsigned int)g_finish_last_candidate_mask);
-        ui_plain_line(6, line);
         break;
 
     case UI_PAGE_TRACE:
@@ -355,6 +365,63 @@ void Knob_UI_Show(void)
                 (unsigned int)trace_line_is_valid());
         ui_plain_line(5, line);
         break;
+
+    case UI_PAGE_RUN_LOG: {
+        char reason = 'N';
+        if (g_race_log.stop_reason == RACE_STOP_CALIBRATION_PULSE) reason = 'P';
+        else if (g_race_log.stop_reason == RACE_STOP_MANUAL) reason = 'M';
+
+        sprintf(line, "LOG R%02lu S%u N%u",
+                (unsigned long)g_race_log.run_number,
+                (unsigned int)g_race_log.phase,
+                (unsigned int)g_race_log.finish_event_count);
+        ui_plain_line(0, line);
+        sprintf(line, "B:%7lu", (unsigned long)g_race_log.pulse_b);
+        ui_plain_line(1, line);
+        sprintf(line, "C:%7lu", (unsigned long)g_race_log.pulse_c);
+        ui_plain_line(2, line);
+        sprintf(line, "D:%7lu", (unsigned long)g_race_log.pulse_d);
+        ui_plain_line(3, line);
+        sprintf(line, "F:%7lu %02X",
+                (unsigned long)g_race_log.first_finish_candidate_pulse,
+                (unsigned int)g_race_log.first_finish_candidate_mask);
+        ui_plain_line(4, line);
+        sprintf(line, "CMD:%7lu", (unsigned long)g_race_log.stop_command_pulse);
+        ui_plain_line(5, line);
+        sprintf(line, "STP:%7lu", (unsigned long)g_race_log.final_stop_pulse);
+        ui_plain_line(6, line);
+        sprintf(line, "T:%5lu G:%3u%c",
+                (unsigned long)g_race_log.stop_command_time_ms,
+                (unsigned int)(g_race_log.max_abs_gyro_dps_x10 / 10U),
+                reason);
+        ui_plain_line(7, line);
+        break;
+    }
+
+    case UI_PAGE_MASK_LOG_1:
+    case UI_PAGE_MASK_LOG_2: {
+        uint8_t first = (ui_page == UI_PAGE_MASK_LOG_1) ? 0U : 7U;
+        uint8_t page_number = (ui_page == UI_PAGE_MASK_LOG_1) ? 1U : 2U;
+        sprintf(line, "MASK%u R%02lu N%u%s",
+                (unsigned int)page_number,
+                (unsigned long)g_race_log.run_number,
+                (unsigned int)g_race_log.finish_event_count,
+                g_race_log.finish_event_overflow ? "+" : "");
+        ui_plain_line(0, line);
+        for (uint8_t row = 0U; row < 7U; row++) {
+            uint8_t index = (uint8_t)(first + row);
+            if (index < g_race_log.finish_event_count) {
+                sprintf(line, "%02u %7lu %02X",
+                        (unsigned int)index,
+                        (unsigned long)g_race_log.finish_events[index].pulse,
+                        (unsigned int)g_race_log.finish_events[index].mask);
+            } else {
+                line[0] = '\0';
+            }
+            ui_plain_line((uint8_t)(row + 1U), line);
+        }
+        break;
+    }
 
     default:
         sprintf(line, "IO %s", state_name);

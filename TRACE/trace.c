@@ -26,14 +26,14 @@ void trace_init() {
         DL_ADC12_SAMP_CONV_RES_12_BIT, 
         DL_ADC12_SAMP_CONV_DATA_FORMAT_UNSIGNED);
 
-    sensors[CH1].weight = -30;
-    sensors[CH2].weight = -23;
+    sensors[CH1].weight = -32;
+    sensors[CH2].weight = -24;
     sensors[CH3].weight = -18;
     sensors[CH4].weight = -5;
     sensors[CH5].weight =  5;
     sensors[CH6].weight =  18;
-    sensors[CH7].weight =  23;
-    sensors[CH8].weight =  30;
+    sensors[CH7].weight =  24;
+    sensors[CH8].weight =  32;
 
     // 3. 重新插上插头（使能 ADC），准备接客
     DL_ADC12_enableConversions(OUT_INST);

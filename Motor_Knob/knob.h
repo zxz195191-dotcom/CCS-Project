@@ -10,4 +10,5 @@ uint8_t Knob_Button(void);                  /* 0=NONE 1=CLICK 2=DOUBLE 3=LONG */
 uint8_t Knob_GetLastButton(void);
 void    Knob_UI_Show(void);
 void    Knob_UI_Refresh(void);
+void    Knob_UI_OpenRaceLog(void);
 void    Knob_Show_OLED(int32_t cnt, uint8_t btn);
