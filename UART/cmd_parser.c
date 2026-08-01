@@ -1,6 +1,11 @@
 #include "headfile.h"
 #include "cmd_parser.h"
 #include "race_mode.h"
+#include "race_log.h"
+
+#define REMOTE_LINK_TX_PERIOD_US       100000U
+#define REMOTE_LINK_LAUNCH_DELAY_US     20000U
+#define REMOTE_LINK_Q3_LIMIT_US       3500000U
 
 /* ── 环形缓冲区（ISR 写，主循环读）── */
 #define RX_BUF_SIZE 64
@@ -11,6 +16,16 @@ static volatile uint8_t rx_tail = 0;
 /* ── 命令行拼装 ── */
 static char cmd_line[32];
 static uint8_t cmd_len = 0;
+
+static uint8_t remote_question = 2U;
+static RemoteLinkState remote_state = REMOTE_LINK_IDLE;
+static uint32_t remote_last_tx_us = 0U;
+static uint32_t remote_launch_due_us = 0U;
+static uint32_t remote_launch_start_us = 0U;
+static uint32_t remote_q3_elapsed_ms = 0U;
+static uint8_t remote_tx_enabled = 0U;
+static char remote_rx_window[3] = {0};
+static uint8_t remote_rx_count = 0U;
 
 /* ── 外部 PID 变量（定义在 MPU_Algorithm.c）── */
 extern volatile float g_motor_Kp;
@@ -26,19 +41,261 @@ extern volatile float g_K_steer;
 static void cmd_push_char(char c);
 static void cmd_reply(const char *str);
 static void cmd_respond_float(const char *label, float val);
+static uint8_t remote_link_consume_byte(char c);
+static void remote_link_reset_matcher(void);
+
+static char remote_link_lower(char c)
+{
+    if (c >= 'A' && c <= 'Z') return (char)(c - 'A' + 'a');
+    return c;
+}
+
+static uint8_t remote_question_mode(uint8_t question)
+{
+    if (question == 2U) return RACE_MODE_1;
+    if (question == 4U) return RACE_MODE_2;
+    if (question == 5U || question == 6U) return RACE_MODE_3;
+    return 0U;
+}
+
+static uint8_t remote_question_needs_link(void)
+{
+    return (remote_question >= 3U && remote_question <= 6U) ? 1U : 0U;
+}
+
+static void remote_link_apply_question_mode(void)
+{
+    uint8_t mode = remote_question_mode(remote_question);
+
+    if (mode == 0U) {
+        Race_Mode_Stop();
+    } else if (g_race_mode != mode && !g_race_logging_active) {
+        (void)Race_Mode_Select(mode);
+    }
+}
+
+static void remote_link_reset_matcher(void)
+{
+    remote_rx_window[0] = 0;
+    remote_rx_window[1] = 0;
+    remote_rx_window[2] = 0;
+    remote_rx_count = 0U;
+}
+
+uint8_t Remote_Link_GetQuestion(void)
+{
+    return remote_question;
+}
+
+uint32_t Remote_Link_GetQ3ElapsedMs(void)
+{
+    return remote_q3_elapsed_ms;
+}
+
+RemoteLinkState Remote_Link_GetState(void)
+{
+    return remote_state;
+}
+
+void Remote_Link_SetQuestion(uint8_t question)
+{
+    if (g_target_speed > 1.0f || remote_state == REMOTE_LINK_RUNNING ||
+        remote_state == REMOTE_LINK_LAUNCH_DELAY ||
+        remote_state == REMOTE_LINK_Q3_TIMING) return;
+
+    if (question < 1U) question = 1U;
+    if (question > 6U) question = 6U;
+    if (question == remote_question) return;
+
+    remote_question = question;
+    remote_state = REMOTE_LINK_IDLE;
+    remote_last_tx_us = 0U;
+    remote_q3_elapsed_ms = 0U;
+    remote_tx_enabled = 0U;
+    remote_link_reset_matcher();
+    remote_link_apply_question_mode();
+    Knob_UI_Refresh();
+}
+
+void Remote_Link_StartPrepare(void)
+{
+    if (g_target_speed > 1.0f || remote_state == REMOTE_LINK_RUNNING ||
+        remote_state == REMOTE_LINK_LAUNCH_DELAY ||
+        remote_state == REMOTE_LINK_Q3_TIMING ||
+        !remote_question_needs_link()) return;
+
+    remote_link_apply_question_mode();
+
+    rx_head = 0U;
+    rx_tail = 0U;
+    cmd_len = 0U;
+    while (!DL_UART_Main_isRXFIFOEmpty(TRACE_UART_INST)) {
+        (void)DL_UART_Main_receiveData(TRACE_UART_INST);
+    }
+
+    remote_state = REMOTE_LINK_WAIT_ACK;
+    remote_last_tx_us = Micros() - REMOTE_LINK_TX_PERIOD_US;
+    remote_q3_elapsed_ms = 0U;
+    remote_tx_enabled = 1U;
+    remote_link_reset_matcher();
+    Knob_UI_Refresh();
+}
+
+void Remote_Link_CancelPrepare(void)
+{
+    if (remote_state == REMOTE_LINK_RUNNING ||
+        remote_state == REMOTE_LINK_LAUNCH_DELAY) return;
+
+    remote_state = REMOTE_LINK_IDLE;
+    remote_last_tx_us = 0U;
+    remote_tx_enabled = 0U;
+    remote_link_reset_matcher();
+    Knob_UI_Refresh();
+}
+
+uint8_t Remote_Link_RequestLaunch(uint32_t start_us)
+{
+    if (remote_question == 1U) {
+        Knob_UI_Refresh();
+        return 0U;
+    }
+
+    if (remote_question == 2U) {
+        remote_link_apply_question_mode();
+        Race_Mode_StartAt((start_us != 0U) ? start_us : Micros());
+        remote_state = (g_target_speed > 1.0f) ?
+            REMOTE_LINK_RUNNING : REMOTE_LINK_IDLE;
+        Knob_UI_Refresh();
+        return (remote_state == REMOTE_LINK_RUNNING) ? 1U : 0U;
+    }
+
+    if (g_target_speed > 1.0f || !remote_question_needs_link() ||
+        remote_state == REMOTE_LINK_LAUNCH_DELAY ||
+        remote_state == REMOTE_LINK_RUNNING ||
+        remote_state == REMOTE_LINK_Q3_TIMING) {
+        Knob_UI_Refresh();
+        return 0U;
+    }
+
+    remote_tx_enabled = 1U;
+    remote_launch_start_us = (start_us != 0U) ? start_us : Micros();
+    remote_launch_due_us = Micros() + REMOTE_LINK_LAUNCH_DELAY_US;
+    remote_state = REMOTE_LINK_LAUNCH_DELAY;
+    Knob_UI_Refresh();
+    return 1U;
+}
+
+void Remote_Link_Stop(void)
+{
+    if (remote_state == REMOTE_LINK_Q3_TIMING) {
+        uint32_t elapsed_us = (uint32_t)(Micros() - remote_launch_start_us);
+        if (elapsed_us > REMOTE_LINK_Q3_LIMIT_US) {
+            elapsed_us = REMOTE_LINK_Q3_LIMIT_US;
+        }
+        remote_q3_elapsed_ms = elapsed_us / 1000U;
+        remote_state = REMOTE_LINK_Q3_DONE;
+        Knob_UI_Refresh();
+        return;
+    }
+
+    Race_Mode_Stop();
+    remote_state = REMOTE_LINK_IDLE;
+    remote_last_tx_us = 0U;
+    remote_link_reset_matcher();
+    Knob_UI_Refresh();
+}
+
+void Remote_Link_Tick(uint32_t now_us)
+{
+    if (remote_tx_enabled && remote_question_needs_link()) {
+        if ((uint32_t)(now_us - remote_last_tx_us) >=
+            REMOTE_LINK_TX_PERIOD_US) {
+            uint8_t question_frame[3] = {
+                (uint8_t)('0' + remote_question), '\r', '\n'
+            };
+            uart_send_nb(question_frame, sizeof(question_frame));
+            remote_last_tx_us = now_us;
+        }
+    }
+
+    if (remote_state == REMOTE_LINK_LAUNCH_DELAY) {
+        if ((int32_t)(now_us - remote_launch_due_us) >= 0) {
+            if (remote_question == 3U) {
+                /* Q3 starts only the stationary ball-control device. */
+                remote_state = REMOTE_LINK_Q3_TIMING;
+                remote_q3_elapsed_ms = 0U;
+            } else {
+                remote_link_apply_question_mode();
+                Race_Mode_StartAt(remote_launch_start_us);
+                remote_state = (g_target_speed > 1.0f) ?
+                    REMOTE_LINK_RUNNING : REMOTE_LINK_IDLE;
+            }
+            Knob_UI_Refresh();
+        }
+    } else if (remote_state == REMOTE_LINK_Q3_TIMING) {
+        uint32_t elapsed_us = (uint32_t)(now_us - remote_launch_start_us);
+        if (elapsed_us >= REMOTE_LINK_Q3_LIMIT_US) {
+            remote_q3_elapsed_ms = REMOTE_LINK_Q3_LIMIT_US / 1000U;
+            remote_state = REMOTE_LINK_Q3_DONE;
+        } else {
+            remote_q3_elapsed_ms = elapsed_us / 1000U;
+        }
+        Knob_UI_Refresh();
+    } else if (remote_state == REMOTE_LINK_RUNNING) {
+        if (g_target_speed <= 1.0f && !g_race_logging_active) {
+            remote_state = REMOTE_LINK_IDLE;
+            Knob_UI_Refresh();
+        }
+    }
+}
+
+static uint8_t remote_link_consume_byte(char c)
+{
+    if (remote_state != REMOTE_LINK_WAIT_ACK &&
+        remote_state != REMOTE_LINK_READY) return 0U;
+
+    c = remote_link_lower(c);
+    if (remote_rx_count < 3U) {
+        remote_rx_window[remote_rx_count++] = c;
+    } else {
+        remote_rx_window[0] = remote_rx_window[1];
+        remote_rx_window[1] = remote_rx_window[2];
+        remote_rx_window[2] = c;
+    }
+
+    if (remote_rx_count == 3U &&
+        remote_rx_window[0] == 'o' &&
+        remote_rx_window[1] == 'k' &&
+        remote_rx_window[2] == (char)('0' + remote_question)) {
+        if (remote_state != REMOTE_LINK_READY) {
+            remote_state = REMOTE_LINK_READY;
+            Knob_UI_Refresh();
+        }
+        remote_link_reset_matcher();
+    }
+    return 1U;
+}
 
 /* ================================================================
- *  CMD_Init — 使能 UART1 RX 中断
+ *  CMD_Init — UART1 RX polling initialization
  * ================================================================ */
 void CMD_Init(void)
 {
-    /* 外设级中断：RX 收到数据 → 触发 */
-    DL_UART_Main_enableInterrupt(TRACE_UART_INST,
+    /* 仅轮询 UART1 RX，避免 ISR 与主循环同时读取 FIFO。 */
+    DL_UART_Main_disableInterrupt(TRACE_UART_INST,
         DL_UART_MAIN_INTERRUPT_RX);
+    NVIC_DisableIRQ(TRACE_UART_INST_INT_IRQN);
+    NVIC_ClearPendingIRQ(TRACE_UART_INST_INT_IRQN);
 
-    /* NVIC 优先级 3（最低），不干扰编码器（GPIOB 优先级 2）和 SysTick（优先级 0） */
-    NVIC_SetPriority(TRACE_UART_INST_INT_IRQN, 3);
-    NVIC_EnableIRQ(TRACE_UART_INST_INT_IRQN);
+    rx_head = 0U;
+    rx_tail = 0U;
+    cmd_len = 0U;
+    remote_question = 2U;
+    remote_state = REMOTE_LINK_IDLE;
+    remote_last_tx_us = 0U;
+    remote_q3_elapsed_ms = 0U;
+    remote_tx_enabled = 0U;
+    remote_link_reset_matcher();
 }
 
 /* ================================================================
@@ -267,7 +524,9 @@ void CMD_RX(void)
     while (!DL_UART_Main_isRXFIFOEmpty(TRACE_UART_INST)) {
         Rx_flag = 1;
         char c = (char)DL_UART_Main_receiveData(TRACE_UART_INST);
-        cmd_push_char(c);
+        if (!remote_link_consume_byte(c)) {
+            cmd_push_char(c);
+        }
     }
 
     int c;

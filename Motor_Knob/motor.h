@@ -18,6 +18,7 @@ typedef struct {
 extern const Motor_Config_t Motor_Cfg[Wheel_count];
 
 void Motor_Set_Speed(Motor_ID_e motor_id, int32_t speed);
+void Motor_Brake(Motor_ID_e motor_id);
 
 /* 右轮编码器 (ISR 更新) */
 extern volatile int32_t  right_cnt;

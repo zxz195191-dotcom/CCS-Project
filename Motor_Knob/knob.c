@@ -50,7 +50,7 @@ static uint8_t ui_param_count(UiPage page)
 {
     switch (page) {
     case UI_PAGE_MODE:  return 4U;
-    case UI_PAGE_MOTOR: return 4U;
+    case UI_PAGE_MOTOR: return 6U;
     case UI_PAGE_TRACE: return 2U;
     case UI_PAGE_GYRO:  return 2U;
     case UI_PAGE_IO:    return 2U;
@@ -120,7 +120,7 @@ static void ui_select_mode(int8_t delta)
         if (candidate > (int8_t)RACE_MODE_3) candidate = (int8_t)RACE_MODE_1;
         next = (uint8_t)candidate;
         if (Race_Mode_IsConfigured(next)) {
-            (void)Race_Mode_Select(next);
+            if (Race_Mode_Select(next)) Remote_Link_CancelPrepare();
             return;
         }
     }
@@ -129,7 +129,8 @@ static void ui_select_mode(int8_t delta)
 static void ui_adjust_value(int8_t delta)
 {
     if (Race_Mode_ParametersLocked() &&
-        (ui_page == UI_PAGE_MOTOR || ui_page == UI_PAGE_TRACE)) {
+        ((ui_page == UI_PAGE_MOTOR && ui_param < 3) ||
+         ui_page == UI_PAGE_TRACE)) {
         return;
     }
 
@@ -169,6 +170,12 @@ static void ui_adjust_value(int8_t delta)
             if (next < 0.0f) next = 0.0f;
             if (next > 10.0f) next = 10.0f;
             (void)Race_Mode_SetMotorKi(next);
+        } else if (ui_param == 3) {
+            int8_t next = (int8_t)Remote_Link_GetQuestion() +
+                ((delta < 0) ? -1 : 1);
+            if (next < 1) next = 6;
+            if (next > 6) next = 1;
+            Remote_Link_SetQuestion((uint8_t)next);
         }
         break;
 
@@ -229,9 +236,23 @@ static void ui_process(int8_t enc, uint8_t button)
         ui_state = UI_PARAM_SELECT;
         ui_param = 0;
     } else if (ui_state == UI_PARAM_SELECT) {
-        if (ui_page == UI_PAGE_MOTOR && ui_param == 3) {
-            if (g_target_speed > 1.0f) Race_Mode_Stop();
-            else Race_Mode_StartAt(OLED_Button_GetLastPressTimeUs());
+        if (ui_page == UI_PAGE_MOTOR && ui_param == 4) {
+            RemoteLinkState link_state = Remote_Link_GetState();
+            if (link_state == REMOTE_LINK_WAIT_ACK ||
+                link_state == REMOTE_LINK_READY) {
+                Remote_Link_CancelPrepare();
+            } else {
+                Remote_Link_StartPrepare();
+            }
+        } else if (ui_page == UI_PAGE_MOTOR && ui_param == 5) {
+            if (g_target_speed > 1.0f ||
+                Remote_Link_GetState() == REMOTE_LINK_RUNNING ||
+                Remote_Link_GetState() == REMOTE_LINK_Q3_TIMING) {
+                Remote_Link_Stop();
+            } else {
+                (void)Remote_Link_RequestLaunch(
+                    OLED_Button_GetLastPressTimeUs());
+            }
         } else if (ui_page == UI_PAGE_GYRO && ui_param == 1) {
             ui_calibrate_gyro();
         } else if (ui_page == UI_PAGE_IO && ui_param == 1) {
@@ -396,11 +417,16 @@ void Knob_UI_Show(void)
         ui_plain_line(6, "M1 M2 M3 READY");
         break;
 
-    case UI_PAGE_MOTOR:
-        if (Race_Mode_ParametersLocked()) {
-            sprintf(line, "M%u MOTOR LOCK", (unsigned int)g_race_mode);
+    case UI_PAGE_MOTOR: {
+        RemoteLinkState link_state = Remote_Link_GetState();
+        uint8_t question = Remote_Link_GetQuestion();
+        if (question == 1U || question == 3U) {
+            sprintf(line, "Q%u MOTOR OFF", (unsigned int)question);
+        } else if (Race_Mode_ParametersLocked()) {
+            sprintf(line, "Q%u M%u LOCK", (unsigned int)question,
+                    (unsigned int)g_race_mode);
         } else {
-            sprintf(line, "M%u MOTOR %s",
+            sprintf(line, "Q%u M%u %s", (unsigned int)question,
                     (unsigned int)g_race_mode, state_name);
         }
         ui_plain_line(0, line);
@@ -414,14 +440,54 @@ void Knob_UI_Show(void)
         sprintf(line, "KI:%+.3f", (double)g_motor_Ki);
         ui_line(3, selected, line);
         selected = (ui_state != UI_PAGE_SELECT && ui_param == 3);
-        ui_line(4, selected,
-                (g_target_speed > 1.0f) ? "RUN:STOP" : "RUN:START");
-        sprintf(line, "T:%2lu.%1lu P:%7lu",
-                (unsigned long)(g_lap_time_ms / 1000U),
-                (unsigned long)((g_lap_time_ms / 100U) % 10U),
-                (unsigned long)g_lap_pulses);
-        ui_plain_line(5, line);
+        sprintf(line, "QUESTION:Q%u", (unsigned int)question);
+        ui_line(4, selected, line);
+        selected = (ui_state != UI_PAGE_SELECT && ui_param == 4);
+        if (question <= 2U) {
+            sprintf(line, "PREP:N/A");
+        } else if (link_state == REMOTE_LINK_WAIT_ACK) {
+            sprintf(line, "PREP:WAIT%u", (unsigned int)question);
+        } else if (link_state == REMOTE_LINK_READY) {
+            sprintf(line, "PREP:OK%u", (unsigned int)question);
+        } else if (link_state == REMOTE_LINK_LAUNCH_DELAY) {
+            sprintf(line, "PREP:GO%u", (unsigned int)question);
+        } else if (link_state == REMOTE_LINK_RUNNING ||
+                   link_state == REMOTE_LINK_Q3_TIMING) {
+            sprintf(line, "PREP:RUN");
+        } else if (link_state == REMOTE_LINK_Q3_DONE) {
+            sprintf(line, "PREP:DONE");
+        } else {
+            sprintf(line, "PREP:START");
+        }
+        ui_line(5, selected, line);
+        selected = (ui_state != UI_PAGE_SELECT && ui_param == 5);
+        if (question == 1U) {
+            sprintf(line, "RUN:N/A");
+        } else if (g_target_speed > 1.0f ||
+                   link_state == REMOTE_LINK_RUNNING ||
+                   link_state == REMOTE_LINK_Q3_TIMING) {
+            sprintf(line, "RUN:STOP");
+        } else if (link_state == REMOTE_LINK_Q3_DONE) {
+            sprintf(line, "RUN:DONE");
+        } else if (question == 2U) {
+            sprintf(line, "RUN:START");
+        } else if (link_state == REMOTE_LINK_LAUNCH_DELAY) {
+            sprintf(line, "RUN:GO");
+        } else {
+            sprintf(line, "RUN:START");
+        }
+        ui_line(6, selected, line);
+        if (question == 3U) {
+            sprintf(line, "TIME:3.50s");
+        } else {
+            sprintf(line, "T:%2lu.%1lu P:%6lu",
+                    (unsigned long)(g_lap_time_ms / 1000U),
+                    (unsigned long)((g_lap_time_ms / 100U) % 10U),
+                    (unsigned long)g_lap_pulses);
+        }
+        ui_plain_line(7, line);
         break;
+    }
 
     case UI_PAGE_TRACE:
         if (Race_Mode_ParametersLocked()) {

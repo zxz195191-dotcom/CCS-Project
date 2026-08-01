@@ -39,6 +39,15 @@ void Motor_Set_Speed(Motor_ID_e motor_id, int32_t speed)
     DL_TimerA_setCaptureCompareValue(m->pmw_tiemr, (Max_Speed - abs_speed), m->cc_index);
 }
 
+/* TB6612 主动短刹：IN1=H, IN2=H, PWM=100% → 电机两端短路制动 */
+void Motor_Brake(Motor_ID_e motor_id)
+{
+    const Motor_Config_t *m = &Motor_Cfg[motor_id];
+    DL_GPIO_setPins(m->dir_port, m->in1_pin);
+    DL_GPIO_setPins(m->dir_port, m->in2_pin);
+    DL_TimerA_setCaptureCompareValue(m->pmw_tiemr, 0U, m->cc_index);
+}
+
 /* ── 右轮编码器 ISR ── */
 volatile int32_t  right_cnt     = 0;
 volatile uint32_t right_isr_cnt = 0;

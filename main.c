@@ -67,6 +67,7 @@ volatile uint8_t g_race_logging_active = 0U;
 volatile uint8_t g_race_mode = RACE_MODE_1;
 
 static RaceStopReason race_planned_stop_reason = RACE_STOP_NONE;
+static uint8_t race_motion_armed = 0U;
 static uint8_t mode2_plan_active = 0U;
 static uint8_t mode2_brake_logged = 0U;
 static uint8_t mode3_plan_active = 0U;
@@ -81,7 +82,7 @@ static uint32_t mode2_stop_lead_pulses =
 
 static RaceModeConfig race_mode_profiles[3] = {
     /* Mode 1: sealed 20 s lap / A-point precision-stop baseline. */
-    {100000.0f, 0.0005f, 0.08f, 8.0f, 2.0f, 0.0f, 1603000U, 1U},
+    {100000.0f, 0.0005f, 0.08f, 8.0f, 2.0f, 0.0f, 1598000U, 1U},
     /* Mode 2: independent smooth A-to-B profile; values remain field-tunable. */
     {80000.0f, 0.0005f, 0.08f, 8.0f, 2.0f, 0.0f, 426000U, 1U},
     /* Mode 3: smooth full lap, then stop only after fully crossing A. */
@@ -117,12 +118,22 @@ void Race_Mode_Apply(void)
     trace_set_weight_profile(g_race_mode == RACE_MODE_1);
 }
 
+static uint32_t race_cooldown_until_us = 0U;
+
 void Race_Mode_StartAt(uint32_t start_us)
 {
     if (g_race_logging_active || !Race_Mode_IsConfigured(g_race_mode)) return;
 
+    /* 停车后冷却期，禁止立即重新发车（防刹车震动误触） */
+    if (race_cooldown_until_us != 0U) {
+        uint32_t now = (start_us != 0U) ? start_us : Micros();
+        if ((int32_t)(now - race_cooldown_until_us) < 0) return;
+        race_cooldown_until_us = 0U;
+    }
+
     race_start_request_us = (start_us != 0U) ? start_us : Micros();
     race_start_request_valid = 1U;
+    race_motion_armed = 1U;
     Race_Mode_Apply();
     race_planned_stop_reason = RACE_STOP_NONE;
     mode2_brake_logged = 0U;
@@ -151,6 +162,7 @@ void Race_Mode_Start(void)
 
 void Race_Mode_Stop(void)
 {
+    race_motion_armed = 0U;
     mode2_plan_active = 0U;
     mode3_plan_active = 0U;
     race_planned_stop_reason = RACE_STOP_NONE;
@@ -192,6 +204,7 @@ uint8_t Race_Mode_Select(uint8_t mode)
     }
 
     g_race_mode = mode;
+    race_motion_armed = 0U;
     mode2_plan_active = 0U;
     mode3_plan_active = 0U;
     race_planned_stop_reason = RACE_STOP_NONE;
@@ -429,10 +442,35 @@ static void race_mode3_update_speed_plan(float dt)
 
 static void race_mode_update_speed_plan(float dt)
 {
+    if (!race_motion_armed) return;
+
     if (g_race_mode == RACE_MODE_3) {
         race_mode3_update_speed_plan(dt);
         return;
     }
+
+    /* Mode 1: 终点前 ~15cm 线性减速，降低滑行距离和采样抖动 */
+    if (g_race_mode == RACE_MODE_1 && g_race_logging_active &&
+        g_lap_recording && !race_stop_pending && g_target_speed > 1.0f) {
+        const RaceModeConfig *config = race_mode_current_config();
+        uint32_t pulse = race_current_pulses();
+        uint32_t decel_start = 1550000U;
+        uint32_t decel_end   = 1590000U;
+        float approach_speed = config->run_speed * 0.55f;
+
+        if (pulse < decel_start) {
+            g_target_speed = config->run_speed;
+        } else if (pulse < decel_end) {
+            float ratio = (float)(decel_end - pulse) /
+                          (float)(decel_end - decel_start);
+            g_target_speed = approach_speed +
+                (config->run_speed - approach_speed) * ratio;
+        } else {
+            g_target_speed = approach_speed;
+        }
+        return;
+    }
+
     if (g_race_mode != RACE_MODE_2 || !mode2_plan_active) return;
 
     const RaceModeConfig *config = race_mode_current_config();
@@ -534,6 +572,8 @@ static void race_request_stop(uint32_t now_us, RaceStopReason reason)
 {
     if (!g_lap_recording || race_stop_pending) return;
 
+    race_motion_armed = 0U;
+    g_target_speed = 0.0f;
     g_race_log.stop_command_pulse = race_current_pulses();
     g_race_log.stop_command_time_ms =
         (uint32_t)(now_us - lap_start_us) / 1000U;
@@ -543,6 +583,28 @@ static void race_request_stop(uint32_t now_us, RaceStopReason reason)
     g_lap_recording = 0U;
     race_stop_pending = 1U;
     race_stop_stable_count = 0U;
+}
+
+static void race_log_send_uart(void)
+{
+    char reason = 'N';
+    if (g_race_log.stop_reason == RACE_STOP_CALIBRATION_PULSE) reason = 'P';
+    else if (g_race_log.stop_reason == RACE_STOP_FINISH_LINE) reason = 'L';
+    else if (g_race_log.stop_reason == RACE_STOP_MANUAL) reason = 'M';
+
+    char buf[96];
+    /* R=序号 F=首次视觉脉冲 M=掩码(hex) CMD=停车命令脉冲 STP=最终停稳脉冲 T=总时间秒 原因 */
+    sprintf(buf,
+        "LOG R=%02lu F=%7lu M=%02X CMD=%7lu STP=%7lu T=%2lu.%02lu %c\r\n",
+        (unsigned long)g_race_log.run_number,
+        (unsigned long)g_race_log.first_finish_candidate_pulse,
+        (unsigned int)g_race_log.first_finish_candidate_mask,
+        (unsigned long)g_race_log.stop_command_pulse,
+        (unsigned long)g_race_log.final_stop_pulse,
+        (unsigned long)(g_race_log.final_stop_time_ms / 1000U),
+        (unsigned long)((g_race_log.final_stop_time_ms / 10U) % 100U),
+        reason);
+    uart_send_nb((const uint8_t *)buf, (uint16_t)strlen(buf));
 }
 
 static void race_log_complete(uint32_t now_us)
@@ -558,6 +620,8 @@ static void race_log_complete(uint32_t now_us)
     g_race_log_ready = 1U;
     race_stop_pending = 0U;
     Knob_UI_OpenRaceLog();
+    /* 停车后 3 秒冷却期 — 防止刹车震动误触发按钮重新发车 */
+    race_cooldown_until_us = now_us + 3000000U;
 }
 
 static void race_finish_mask_commit(uint32_t pulse, uint8_t mask)
@@ -615,7 +679,7 @@ static uint8_t race_finish_line_confirmed(uint8_t mask)
          g_race_log.phase == RACE_PHASE_AFTER_A) ? 1U : 0U;
 
     if (pulse < FINISH_LOG_START_PULSES ||
-        !in_final_curve ||
+        (g_race_mode != RACE_MODE_1 && !in_final_curve) ||
         !race_finish_pattern_matches(mask)) {
         race_finish_pattern_count = 0U;
         return 0U;
@@ -769,7 +833,7 @@ static void race_log_navigation(float corrected_gyro_dps, float dt)
 
 static void lap_record_update(uint32_t now_us, int32_t dL, int32_t dR)
 {
-    bool run_requested = g_target_speed > 1.0f;
+    bool run_requested = race_motion_armed && g_target_speed > 1.0f;
 
     if (run_requested && !g_race_logging_active) {
         race_log_start(now_us);
@@ -843,8 +907,6 @@ int main(void)
 
 //    uart_transmit(OLED_IsPresent() ? "OLED OK\r\n" : "OLED FAIL\r\n");
 
-    DL_UART_Main_transmitDataBlocking(UART1, 'R');   /* Ready */
-
     uint32_t last_pid = Micros();
 
     while (1) {
@@ -883,7 +945,7 @@ int main(void)
 
             race_mode_update_speed_plan(dt);
 
-            if (ADC_OK()) {
+            if (ADC_OK() && race_motion_armed) {
                 control_err = trace_err;
                 current_base_speed = g_target_speed;
             } else {
@@ -943,15 +1005,18 @@ int main(void)
 
             Motor_Set_Speed(Left_Wheel,  (int32_t)pwm_left);
             Motor_Set_Speed(Right_Wheel, (int32_t)pwm_right);
-            
-            /* Vofa ch1..5: base, speedL, speedR, trace_err, yaw */
-            uart_send_float5(current_base_speed, speedL, speedR,
-                (float)control_err, yaw);
-            
+
+            /* 停车待决 → 短刹覆盖零 PWM，主动锁死轮胎 */
+            if (race_stop_pending) {
+                Motor_Brake(Left_Wheel);
+                Motor_Brake(Right_Wheel);
+            }
+
         }//白色的话 大于0 黑色小于0   黑色大于0
         Knob_Tick();
-        Knob_UI_Show();
         CMD_RX();
+        Remote_Link_Tick(Micros());
         uart_tx_poll();
+        Knob_UI_Show();
     }
 }
