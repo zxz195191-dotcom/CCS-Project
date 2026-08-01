@@ -32,8 +32,8 @@
 #define MODE2_ACCEL_RATE 50000.0f
 #define MODE2_DECEL_RATE 90000.0f
 #define MODE2_APPROACH_SPEED 12000.0f
-#define MODE2_DEFAULT_BRAKE_START_PULSES 350000U
-#define MODE2_DEFAULT_STOP_LEAD_PULSES 500U
+#define MODE2_DEFAULT_BRAKE_START_PULSES 499000U
+#define MODE2_DEFAULT_STOP_LEAD_PULSES 0U
 #define MODE3_LAUNCH_SPEED 1000.0f
 #define MODE3_ACCEL_RATE 40000.0f
 #define MODE3_DECEL_RATE 60000.0f
@@ -84,7 +84,7 @@ static RaceModeConfig race_mode_profiles[3] = {
     /* Mode 1: sealed 20 s lap / A-point precision-stop baseline. */
     {100000.0f, 0.0005f, 0.08f, 8.0f, 2.0f, 0.0f, 1598000U, 1U},
     /* Mode 2: independent smooth A-to-B profile; values remain field-tunable. */
-    {80000.0f, 0.0005f, 0.08f, 8.0f, 2.0f, 0.0f, 426000U, 1U},
+    {80000.0f, 0.0005f, 0.08f, 8.0f, 2.0f, 0.0f, 500000U, 1U},
     /* Mode 3: smooth full lap, then stop only after fully crossing A. */
     {80000.0f, 0.0005f, 0.08f, 8.0f, 2.0f, 0.0f, 1740000U, 1U}
 };
